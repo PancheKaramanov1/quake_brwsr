@@ -72,13 +72,6 @@ export class Player {
   }
 
   public update(deltaTime: number, input: InputState): void {
-    // Enhanced debug logging
-    console.log('Player update called, deltaTime:', deltaTime)
-    console.log('Input state:', input)
-    
-    // Test basic movement first
-    // Movement is handled in handleMovement() method with camera-relative controls
-    
     this.updateDashCooldown(deltaTime)
     this.handleJump(input)
     this.handleDash(input, deltaTime)
@@ -233,8 +226,8 @@ export class Player {
       // Horizontal rotation (yaw) - positive mouseX should rotate right  
       this.state.rotation.y += input.mouseX * this.config.mouseSensitivity
       
-      // Vertical rotation (pitch) - positive mouseY should look down (standard FPS)
-      this.state.rotation.x -= input.mouseY * this.config.mouseSensitivity
+      // Vertical rotation (pitch) - positive mouseY should look up (regular controls)
+      this.state.rotation.x += input.mouseY * this.config.mouseSensitivity
       this.state.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.state.rotation.x))
       
       // Apply rotation to camera

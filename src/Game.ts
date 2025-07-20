@@ -95,13 +95,9 @@ export class Game {
 
   private setupGameLoop(): void {
     this.lastTime = performance.now()
-    console.log('Setting up game loop...')
     
     this.engine.runRenderLoop(() => {
-      if (!this.isRunning) {
-        console.log('Game loop not running - isRunning is false')
-        return
-      }
+      if (!this.isRunning) return
       
       const currentTime = performance.now()
       const deltaTime = (currentTime - this.lastTime) / 1000 // Convert to seconds
@@ -110,27 +106,19 @@ export class Game {
       this.update(deltaTime)
       this.render()
     })
-    
-    console.log('Game loop setup complete')
   }
 
   private update(deltaTime: number): void {
-    console.log('Game update called, deltaTime:', deltaTime)
-    
     // Get input state
     const input = this.inputManager.getInputState()
-    console.log('Input from manager:', input)
     
-    // Update player (removed pointer lock requirement for debugging)
+    // Update player
     this.player.update(deltaTime, input)
     
     // Handle shooting with debug
     if (input.shoot) {
       console.log('Shoot input detected!')
       this.handleShooting()
-    } else if (input.shoot === false) {
-      // Just shot, reset the shooting state to prevent continuous fire
-      // This is handled by the fire rate in WeaponSystem
     }
     
     // Update weapon system
