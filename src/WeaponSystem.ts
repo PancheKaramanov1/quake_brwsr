@@ -20,12 +20,15 @@ export class WeaponSystem {
   public fireRocket(startPosition: Vector3, direction: Vector3): boolean {
     const currentTime = Date.now()
     
-    // Check fire rate limit
-    if (currentTime - this.lastFireTime < this.config.fireRate) {
+    // Check fire rate limit (500ms for faster action)
+    const fireDelay = 500 // 500ms between shots
+    if (currentTime - this.lastFireTime < fireDelay) {
+      console.log(`Fire rate limited. Wait ${(fireDelay - (currentTime - this.lastFireTime))}ms`)
       return false
     }
     
     this.lastFireTime = currentTime
+    console.log('Firing rocket at:', startPosition, 'direction:', direction)
     
     // Create rocket projectile
     const rocket = this.createRocketMesh()
@@ -34,15 +37,16 @@ export class WeaponSystem {
     // Calculate velocity
     const velocity = direction.normalize().scale(this.config.projectileSpeed)
     
-    // Setup physics
-    rocket.physicsImpostor = new PhysicsImpostor(
-      rocket,
-      PhysicsImpostor.SphereImpostor,
-      { mass: 1, restitution: 0 },
-      this.scene
-    )
+    // Disable physics for debugging
+    console.log('Rocket physics disabled for debugging')
+    // rocket.physicsImpostor = new PhysicsImpostor(
+    //   rocket,
+    //   PhysicsImpostor.SphereImpostor,
+    //   { mass: 1, restitution: 0 },
+    //   this.scene
+    // )
     
-    rocket.physicsImpostor.setLinearVelocity(velocity)
+    // rocket.physicsImpostor.setLinearVelocity(velocity)
     
     // Create projectile data
     const projectile: Projectile = {
@@ -67,14 +71,16 @@ export class WeaponSystem {
   }
 
   private createRocketMesh(): Mesh {
-    // Create rocket mesh (simple cylinder for now)
-    const rocket = Mesh.CreateCylinder('rocket', 0.3, 0.05, 0.05, 8, 1, this.scene)
+    // Create rocket mesh (larger and more visible)
+    const rocket = Mesh.CreateCylinder('rocket', 0.8, 0.15, 0.15, 8, 1, this.scene)
     
-    // Create material
+    // Create bright material
     const material = new StandardMaterial('rocketMaterial', this.scene)
-    material.diffuseColor = new Color3(0.8, 0.2, 0.1)
-    material.emissiveColor = new Color3(0.3, 0.1, 0.05)
+    material.diffuseColor = new Color3(1.0, 0.3, 0.1) // Bright orange
+    material.emissiveColor = new Color3(0.8, 0.4, 0.1) // Glowing effect
     rocket.material = material
+    
+    console.log('Created rocket mesh at:', rocket.position)
     
     return rocket
   }
@@ -131,11 +137,21 @@ export class WeaponSystem {
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const projectile = this.projectiles[i]
       
+      // Manual movement since physics is disabled
+      const movement = projectile.velocity.scale(deltaTime)
+      projectile.mesh.position.addInPlace(movement)
+      
+      console.log(`Rocket ${i} position:`, projectile.mesh.position.toString())
+      
+      // Apply gravity manually
+      projectile.velocity.y -= 9.81 * deltaTime
+      
       // Check for collision with environment
       const collision = this.checkProjectileCollision(projectile)
       
       // Check lifetime or collision
       if (currentTime - projectile.startTime > projectile.lifeTime || collision) {
+        console.log(`Rocket ${i} exploding at:`, projectile.mesh.position.toString())
         this.explodeProjectile(projectile, collision?.point || projectile.mesh.position)
         this.removeProjectile(i)
       }
@@ -143,20 +159,17 @@ export class WeaponSystem {
   }
 
   private checkProjectileCollision(projectile: Projectile): { point: Vector3 } | null {
-    // Cast ray from projectile position in direction of movement
-    const origin = projectile.mesh.position.clone()
-    const direction = projectile.velocity.normalize()
-    const ray = new Ray(origin, direction)
+    // Simple collision detection without physics
+    const position = projectile.mesh.position
     
-    const hit = this.scene.pickWithRay(ray, (mesh) => {
-      return mesh !== projectile.mesh && 
-             !mesh.name.includes('player') && 
-             !mesh.name.includes('rocket') &&
-             mesh.name.includes('ground')
-    })
+    // Check if rocket hit the ground (Y <= 0)
+    if (position.y <= 0) {
+      return { point: position.clone() }
+    }
     
-    if (hit?.hit && hit.distance < 0.5) {
-      return { point: hit.pickedPoint! }
+    // Check if rocket hit arena boundaries (updated for bigger map)
+    if (Math.abs(position.x) > 85 || Math.abs(position.z) > 85) {
+      return { point: position.clone() }
     }
     
     return null
@@ -216,15 +229,23 @@ export class WeaponSystem {
   }
 
   private dealSplashDamage(explosionPoint: Vector3, radius: number, baseDamage: number): void {
-    // In a real game, you would check for all entities in the splash radius
-    // For now, we'll just implement a placeholder that could be extended
     console.log(`Explosion at ${explosionPoint.toString()} with radius ${radius} and damage ${baseDamage}`)
     
-    // TODO: Implement damage to player and other entities within radius
-    // This would involve:
-    // 1. Finding all entities within the splash radius
-    // 2. Calculating damage falloff based on distance
-    // 3. Applying damage to each entity
+    // Store explosion data for external systems to handle
+    // The Game class will call enemyManager.checkSplashDamage()
+    this.lastExplosion = {
+      point: explosionPoint,
+      radius: radius,
+      damage: baseDamage
+    }
+  }
+  
+  private lastExplosion: { point: Vector3, radius: number, damage: number } | null = null
+  
+  public getLastExplosion(): { point: Vector3, radius: number, damage: number } | null {
+    const explosion = this.lastExplosion
+    this.lastExplosion = null // Clear after reading
+    return explosion
   }
 
   private removeProjectile(index: number): void {
@@ -236,10 +257,14 @@ export class WeaponSystem {
       projectile.mesh.metadata.particleSystem.dispose()
     }
     
-    // Dispose physics
-    if (projectile.mesh.physicsImpostor) {
-      projectile.mesh.physicsImpostor.dispose()
-    }
+    // Temporarily disable physics disposal
+    // if (projectile.mesh.physicsImpostor) {
+    //   try {
+    //     projectile.mesh.physicsImpostor.dispose()
+    //   } catch (error) {
+    //     console.warn('Error disposing projectile physics impostor:', error)
+    //   }
+    // }
     
     // Dispose mesh
     projectile.mesh.dispose()

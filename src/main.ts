@@ -10,14 +10,18 @@ async function main(): Promise<void> {
     }
 
     // Create game instance
+    console.log('Creating game instance...')
     const game = new Game(canvas)
     
     // Initialize the game
     console.log('Initializing FPS game...')
     await game.init()
+    console.log('Game initialization complete!')
     
     // Start the game
+    console.log('Starting game...')
     game.start()
+    console.log('Game started successfully!')
     
     // Make game globally accessible for debugging
     ;(window as any).game = game

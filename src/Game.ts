@@ -4,6 +4,7 @@ import { Player } from './Player.js'
 import { InputManager } from './InputManager.js'
 import { WeaponSystem } from './WeaponSystem.js'
 import { Arena } from './Arena.js'
+import { EnemyManager } from './EnemyManager.js'
 import { GameConfig } from './types.js'
 
 export class Game {
@@ -13,6 +14,7 @@ export class Game {
   private inputManager: InputManager
   private weaponSystem: WeaponSystem
   private arena: Arena
+  private enemyManager!: EnemyManager // Will be initialized in init()
   
   private lastTime = 0
   private isRunning = false
@@ -55,10 +57,10 @@ export class Game {
       console.log('Controls:')
       console.log('- WASD: Move')
       console.log('- Mouse: Look around')
-      console.log('- LMB: Shoot rockets')
+      console.log('- F: Shoot rockets')
       console.log('- Space: Jump (or fly up when flying)')
       console.log('- Shift: Dash')
-      console.log('- F: Toggle flight mode')
+      console.log('- G: Toggle flight mode')
       console.log('Click on the canvas to start playing!')
       
     } catch (error) {
@@ -68,15 +70,19 @@ export class Game {
   }
 
   private async initPhysics(): Promise<void> {
-    // Initialize Havok physics engine
-    const havokInstance = await HavokPhysics()
-    const havokPlugin = new HavokPlugin(true, havokInstance)
-    this.scene.enablePhysics(new Vector3(0, -9.81, 0), havokPlugin)
+    // Temporarily disable physics to debug disposal issues
+    console.log('Physics initialization skipped for debugging')
+    // const havokInstance = await HavokPhysics()
+    // const havokPlugin = new HavokPlugin(true, havokInstance)
+    // this.scene.enablePhysics(new Vector3(0, -9.81, 0), havokPlugin)
   }
 
   private createWorld(): void {
     // Arena and world geometry are already created in Arena constructor
     // Player is already created and positioned
+    
+    // Initialize enemy manager with spawn points from arena
+    this.enemyManager = new EnemyManager(this.scene, this.arena.getSpawnPoints())
     
     // Set camera as the active camera
     this.scene.activeCamera = this.player.camera
@@ -89,9 +95,13 @@ export class Game {
 
   private setupGameLoop(): void {
     this.lastTime = performance.now()
+    console.log('Setting up game loop...')
     
     this.engine.runRenderLoop(() => {
-      if (!this.isRunning) return
+      if (!this.isRunning) {
+        console.log('Game loop not running - isRunning is false')
+        return
+      }
       
       const currentTime = performance.now()
       const deltaTime = (currentTime - this.lastTime) / 1000 // Convert to seconds
@@ -100,46 +110,70 @@ export class Game {
       this.update(deltaTime)
       this.render()
     })
+    
+    console.log('Game loop setup complete')
   }
 
   private update(deltaTime: number): void {
+    console.log('Game update called, deltaTime:', deltaTime)
+    
     // Get input state
     const input = this.inputManager.getInputState()
+    console.log('Input from manager:', input)
     
-    // Only update game if pointer is locked (player is actively playing)
-    if (this.inputManager.isPointerLocked()) {
-      // Update player
-      this.player.update(deltaTime, input)
-      
-      // Handle shooting
-      if (input.shoot) {
-        this.handleShooting()
-      }
-      
-      // Update weapon system
-      this.weaponSystem.update(deltaTime)
-      
-      // Update UI
-      this.updateUI()
+    // Update player (removed pointer lock requirement for debugging)
+    this.player.update(deltaTime, input)
+    
+    // Handle shooting with debug
+    if (input.shoot) {
+      console.log('Shoot input detected!')
+      this.handleShooting()
+    } else if (input.shoot === false) {
+      // Just shot, reset the shooting state to prevent continuous fire
+      // This is handled by the fire rate in WeaponSystem
     }
+    
+    // Update weapon system
+    this.weaponSystem.update(deltaTime)
+    
+    // Check for explosions and handle splash damage
+    const explosion = this.weaponSystem.getLastExplosion()
+    if (explosion) {
+      this.enemyManager.checkSplashDamage(explosion.point, explosion.radius, explosion.damage)
+    }
+    
+    // Update enemies
+    this.enemyManager.update(deltaTime, this.player, this.weaponSystem)
+    
+    // Update UI
+    this.updateUI()
   }
 
   private handleShooting(): void {
+    console.log('handleShooting called!')
+    
     // Check if player has ammo
     if (!this.player.consumeAmmo()) {
       console.log('Out of ammo!')
       return
     }
     
+    console.log('Player has ammo, proceeding to shoot...')
+    
     // Get shooting position and direction
     const shootPosition = this.player.camera.position.clone()
     const shootDirection = this.player.camera.getForwardRay().direction
+    
+    console.log('Shoot position:', shootPosition)
+    console.log('Shoot direction:', shootDirection)
     
     // Fire rocket
     const fired = this.weaponSystem.fireRocket(shootPosition, shootDirection)
     
     if (fired) {
       console.log(`Rocket fired! Ammo remaining: ${this.player.state.ammo}`)
+    } else {
+      console.log('Failed to fire rocket')
     }
   }
 
@@ -179,6 +213,12 @@ export class Game {
         crosshair.style.borderColor = '#ffffff'
       }
     }
+    
+    // Update enemy count (if UI element exists)
+    const enemyCount = document.getElementById('enemyCount')
+    if (enemyCount) {
+      enemyCount.textContent = this.enemyManager.getEnemyCount().toString()
+    }
   }
 
   private render(): void {
@@ -204,13 +244,28 @@ export class Game {
   public dispose(): void {
     this.stop()
     
-    // Dispose game systems
-    this.weaponSystem.dispose()
-    this.arena.dispose()
-    
-    // Dispose Babylon.js resources
-    this.scene.dispose()
-    this.engine.dispose()
+    try {
+      // Dispose game systems safely
+      if (this.weaponSystem) {
+        this.weaponSystem.dispose()
+      }
+      if (this.enemyManager) {
+        this.enemyManager.dispose()
+      }
+      if (this.arena) {
+        this.arena.dispose()
+      }
+      
+      // Dispose Babylon.js resources
+      if (this.scene) {
+        this.scene.dispose()
+      }
+      if (this.engine) {
+        this.engine.dispose()
+      }
+    } catch (error) {
+      console.warn('Error during game disposal:', error)
+    }
   }
 
   // Public getters for debugging/external access

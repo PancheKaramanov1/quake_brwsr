@@ -8,19 +8,26 @@ export class Player {
 
   private config: GameConfig = {
     gravity: -30,
-    playerSpeed: 15,
+    playerSpeed: 20,          // Increased for more responsive movement
     jumpPower: 12,
-    dashPower: 25,
-    flightSpeed: 20,
+    dashPower: 35,            // Increased dash power for more impact  
+    flightSpeed: 25,          // Faster flight for better aerial mobility
     friction: 8,
     airFriction: 2,
-    mouseSensitivity: 0.002
+    mouseSensitivity: 0.003   // Slightly more sensitive mouse look
   }
 
   private lastDashTime = 0
   private dashCooldownTime = 1000 // 1 second
-  private flightToggled = false
-  private lastFlightToggle = 0
+  private lastJumpTime = 0
+  private jumpCooldownTime = 500 // 0.5 second between jumps
+  
+  // New movement mechanics
+  private jumpVelocity: number = 0
+  private isGrounded: boolean = true
+  private dashVelocity: Vector3 = new Vector3(0, 0, 0)
+  private dashDuration: number = 0
+  private maxDashDuration: number = 0.3 // 300ms dash duration
 
   constructor(scene: Scene, startPosition: Vector3) {
     // Initialize player state
@@ -48,44 +55,36 @@ export class Player {
     this.mesh.position = startPosition.clone()
     this.mesh.isVisible = false
 
-    // Setup physics
-    this.mesh.physicsImpostor = new PhysicsImpostor(
-      this.mesh,
-      PhysicsImpostor.CylinderImpostor,
-      { mass: 1, restitution: 0.1, friction: 0.1 },
-      scene
-    )
+    // Temporarily disable physics for debugging
+    console.log('Player physics disabled for debugging')
+    // this.mesh.physicsImpostor = new PhysicsImpostor(
+    //   this.mesh,
+    //   PhysicsImpostor.CylinderImpostor,
+    //   { mass: 1, restitution: 0.1, friction: 0.1 },
+    //   scene
+    // )
 
-    // Disable rotation on physics body (when physics body is ready)
-    this.mesh.physicsImpostor.setAngularVelocity(Vector3.Zero())
+    // this.mesh.physicsImpostor.setAngularVelocity(Vector3.Zero())
     
-    // Set linear and angular damping to prevent unwanted rotation
-    if (this.mesh.physicsImpostor.physicsBody) {
-      // For Havok physics, we use different approach to lock rotation
-      this.mesh.physicsImpostor.setAngularVelocity(Vector3.Zero())
-    }
+    // if (this.mesh.physicsImpostor.physicsBody) {
+    //   this.mesh.physicsImpostor.setAngularVelocity(Vector3.Zero())
+    // }
   }
 
   public update(deltaTime: number, input: InputState): void {
-    // Debug: Log input to see if we're receiving it
-    if (input.forward || input.backward || input.left || input.right || input.jump || input.dash) {
-      console.log('Input received:', {
-        forward: input.forward,
-        backward: input.backward,
-        left: input.left,
-        right: input.right,
-        jump: input.jump,
-        dash: input.dash,
-        flight: input.flight
-      })
-    }
+    // Enhanced debug logging
+    console.log('Player update called, deltaTime:', deltaTime)
+    console.log('Input state:', input)
+    
+    // Test basic movement first
+    // Movement is handled in handleMovement() method with camera-relative controls
     
     this.updateDashCooldown(deltaTime)
-    this.handleFlightToggle(input)
-    this.handleDash(input)
+    this.handleJump(input)
+    this.handleDash(input, deltaTime)
     this.handleMovement(deltaTime, input)
     this.handleMouseLook(input)
-    this.checkGroundContact()
+    this.applyGravityAndJump(deltaTime)
     this.updateCameraPosition()
   }
 
@@ -95,27 +94,36 @@ export class Player {
     }
   }
 
-  private handleFlightToggle(input: InputState): void {
+  private handleJump(input: InputState): void {
     const currentTime = Date.now()
-    if (input.flight && currentTime - this.lastFlightToggle > 300) {
-      this.state.isFlying = !this.state.isFlying
-      this.lastFlightToggle = currentTime
+    
+    if (input.jump && this.isGrounded && currentTime - this.lastJumpTime > this.jumpCooldownTime) {
+      // Apply jump velocity
+      this.jumpVelocity = this.config.jumpPower
+      this.isGrounded = false
+      this.lastJumpTime = currentTime
       
-      if (this.state.isFlying) {
-        // Enable flight mode - reduce gravity effect
-        this.mesh.physicsImpostor!.setMass(0.1)
-      } else {
-        // Disable flight mode - restore normal physics
-        this.mesh.physicsImpostor!.setMass(1)
-      }
+      // console.log('Jump executed with power:', this.config.jumpPower)
     }
   }
 
-  private handleDash(input: InputState): void {
+  private handleDash(input: InputState, deltaTime: number): void {
     const currentTime = Date.now()
     
-    if (input.dash && currentTime - this.lastDashTime > this.dashCooldownTime) {
-      // Calculate dash direction based on current movement
+    // Update existing dash if active
+    if (this.dashDuration > 0) {
+      this.dashDuration -= deltaTime
+      if (this.dashDuration <= 0) {
+        // End dash
+        this.dashVelocity = Vector3.Zero()
+        this.state.isDashing = false
+        // console.log('Dash ended')
+      }
+    }
+    
+    // Start new dash if conditions are met
+    if (input.dash && currentTime - this.lastDashTime > this.dashCooldownTime && this.dashDuration <= 0) {
+      // Calculate dash direction based on current movement input
       const dashDirection = new Vector3()
       
       if (input.forward) dashDirection.z += 1
@@ -123,104 +131,109 @@ export class Player {
       if (input.left) dashDirection.x -= 1
       if (input.right) dashDirection.x += 1
       
-      // If no movement input, dash forward
+      // If no movement input, dash forward relative to camera
       if (dashDirection.length() === 0) {
         dashDirection.z = 1
       }
       
-      // Transform to world space relative to camera
-      dashDirection.normalize()
-      const cameraMatrix = this.camera.getWorldMatrix()
-      Vector3.TransformNormalToRef(dashDirection, cameraMatrix, dashDirection)
-      dashDirection.y = 0 // Keep dash horizontal
       dashDirection.normalize()
       
-      // Apply dash impulse
-      const dashImpulse = dashDirection.scale(this.config.dashPower)
-      this.mesh.physicsImpostor!.setLinearVelocity(
-        this.mesh.physicsImpostor!.getLinearVelocity()!.add(dashImpulse)
-      )
+      // Use same simple approach as movement
+      const yaw = this.state.rotation.y
       
+      // Calculate forward and right directions from camera yaw
+      const forward = new Vector3(Math.sin(yaw), 0, Math.cos(yaw))
+      const right = new Vector3(Math.cos(yaw), 0, -Math.sin(yaw))
+      
+      // Calculate final dash direction
+      const finalDashDirection = new Vector3()
+      finalDashDirection.addInPlace(forward.scale(dashDirection.z))
+      finalDashDirection.addInPlace(right.scale(dashDirection.x))
+      finalDashDirection.normalize()
+      
+      // Set dash velocity instead of instant movement
+      this.dashVelocity = finalDashDirection.scale(this.config.dashPower)
+      this.dashDuration = this.maxDashDuration
       this.lastDashTime = currentTime
       this.state.isDashing = true
       
-      // Reset dash state after short duration
-      setTimeout(() => {
-        this.state.isDashing = false
-      }, 200)
+      // console.log('Dash started with velocity:', this.dashVelocity)
     }
   }
 
   private handleMovement(deltaTime: number, input: InputState): void {
-    const currentVelocity = this.mesh.physicsImpostor!.getLinearVelocity()!
+    // Calculate base movement direction
     const moveDirection = new Vector3()
     
-    // Calculate movement direction
+    // Calculate movement direction from input
     if (input.forward) moveDirection.z += 1
     if (input.backward) moveDirection.z -= 1
     if (input.left) moveDirection.x -= 1
     if (input.right) moveDirection.x += 1
     
+    // Combine regular movement with dash velocity
+    let totalMovement = new Vector3()
+    
     if (moveDirection.length() > 0) {
       moveDirection.normalize()
       
-      // Transform to world space relative to camera
-      const cameraMatrix = this.camera.getWorldMatrix()
-      Vector3.TransformNormalToRef(moveDirection, cameraMatrix, moveDirection)
-      moveDirection.y = 0 // Keep movement horizontal unless flying
+      // Use camera rotation for movement direction
+      const yaw = this.state.rotation.y
       
-      if (this.state.isFlying) {
-        // Flight movement - full 3D control
-        if (input.jump) moveDirection.y += 1
-        if (input.dash) moveDirection.y -= 1 // Use dash as descend in flight mode
-        
-        const targetVelocity = moveDirection.scale(this.config.flightSpeed)
-        this.mesh.physicsImpostor!.setLinearVelocity(targetVelocity)
-      } else {
-        // Ground/air movement with Quake-style physics
-        const acceleration = this.state.onGround ? this.config.playerSpeed : this.config.playerSpeed * 0.3
-        const newVelocity = currentVelocity.add(moveDirection.scale(acceleration * deltaTime))
-        
-        // Apply friction
-        const friction = this.state.onGround ? this.config.friction : this.config.airFriction
-        newVelocity.x *= Math.pow(1 - friction * deltaTime, deltaTime)
-        newVelocity.z *= Math.pow(1 - friction * deltaTime, deltaTime)
-        
-        // Limit horizontal speed for ground movement
-        if (this.state.onGround) {
-          const horizontalSpeed = Math.sqrt(newVelocity.x * newVelocity.x + newVelocity.z * newVelocity.z)
-          if (horizontalSpeed > this.config.playerSpeed) {
-            const scale = this.config.playerSpeed / horizontalSpeed
-            newVelocity.x *= scale
-            newVelocity.z *= scale
-          }
-        }
-        
-        this.mesh.physicsImpostor!.setLinearVelocity(new Vector3(newVelocity.x, currentVelocity.y, newVelocity.z))
-      }
-    } else if (!this.state.isFlying) {
-      // Apply friction when not moving
-      const friction = this.state.onGround ? this.config.friction : this.config.airFriction
-      const newVelocity = currentVelocity.clone()
-      newVelocity.x *= Math.pow(1 - friction * deltaTime, deltaTime)
-      newVelocity.z *= Math.pow(1 - friction * deltaTime, deltaTime)
-      this.mesh.physicsImpostor!.setLinearVelocity(newVelocity)
+      // Calculate forward and right directions from camera yaw
+      const forward = new Vector3(Math.sin(yaw), 0, Math.cos(yaw))
+      const right = new Vector3(Math.cos(yaw), 0, -Math.sin(yaw))
+      
+      // Calculate final movement direction
+      const finalMovement = new Vector3()
+      finalMovement.addInPlace(forward.scale(moveDirection.z)) // Forward/backward
+      finalMovement.addInPlace(right.scale(moveDirection.x))   // Left/right
+      
+      // Apply normal movement
+      const normalMovement = finalMovement.normalize().scale(this.config.playerSpeed * deltaTime)
+      totalMovement.addInPlace(normalMovement)
     }
     
-    // Jumping (only when on ground and not flying)
-    if (input.jump && this.state.onGround && !this.state.isFlying) {
-      const jumpVelocity = currentVelocity.clone()
-      jumpVelocity.y = this.config.jumpPower
-      this.mesh.physicsImpostor!.setLinearVelocity(jumpVelocity)
+    // Add dash velocity if dashing
+    if (this.dashDuration > 0) {
+      const dashMovement = this.dashVelocity.scale(deltaTime)
+      totalMovement.addInPlace(dashMovement)
+    }
+    
+    // Apply horizontal movement
+    this.mesh.position.x += totalMovement.x
+    this.mesh.position.z += totalMovement.z
+  }
+
+  private applyGravityAndJump(deltaTime: number): void {
+    // Apply gravity
+    if (!this.isGrounded) {
+      this.jumpVelocity += this.config.gravity * deltaTime
+    }
+    
+    // Apply jump/fall movement
+    const newY = this.mesh.position.y + this.jumpVelocity * deltaTime
+    
+    // Simple ground check (Y = 2 is starting height, ground level would be around 0.75 for standing)
+    const groundLevel = 2 // Player starting height
+    if (newY <= groundLevel) {
+      // Hit ground
+      this.mesh.position.y = groundLevel
+      this.jumpVelocity = 0
+      this.isGrounded = true
+    } else {
+      // In air
+      this.mesh.position.y = newY
+      this.isGrounded = false
     }
   }
 
   private handleMouseLook(input: InputState): void {
     if (input.mouseX !== 0 || input.mouseY !== 0) {
-      // Horizontal rotation (yaw)
-      this.state.rotation.y -= input.mouseX * this.config.mouseSensitivity
+      // Horizontal rotation (yaw) - positive mouseX should rotate right  
+      this.state.rotation.y += input.mouseX * this.config.mouseSensitivity
       
-      // Vertical rotation (pitch) with limits
+      // Vertical rotation (pitch) - positive mouseY should look down (standard FPS)
       this.state.rotation.x -= input.mouseY * this.config.mouseSensitivity
       this.state.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.state.rotation.x))
       
@@ -231,27 +244,22 @@ export class Player {
   }
 
   private checkGroundContact(): void {
-    // Cast ray downward to check if player is on ground
-    const origin = this.mesh.position.clone()
-    const direction = new Vector3(0, -1, 0)
-    const ray = new Ray(origin, direction)
-    
-    const hit = this.mesh.getScene().pickWithRay(ray, (mesh) => {
-      return mesh !== this.mesh && mesh.name.includes('ground')
-    })
-    
-    this.state.onGround = !!(hit?.hit && hit.distance < 1.0)
+    // Simple ground check (no physics ray casting)
+    // Assume player is on ground if Y position is low enough
+    this.state.onGround = this.mesh.position.y <= 2.0
   }
 
   private updateCameraPosition(): void {
     // Keep camera at head level above the physics body
     this.camera.position = this.mesh.position.add(new Vector3(0, 0.7, 0))
     this.state.position = this.mesh.position.clone()
-    this.state.velocity = this.mesh.physicsImpostor!.getLinearVelocity()!
+    
+    // No physics, so set velocity to zero
+    this.state.velocity = Vector3.Zero()
     
     // Prevent player mesh from rotating (keep upright)
     this.mesh.rotation = Vector3.Zero()
-    this.mesh.physicsImpostor!.setAngularVelocity(Vector3.Zero())
+    // this.mesh.physicsImpostor!.setAngularVelocity(Vector3.Zero())
   }
 
   public takeDamage(amount: number): void {
@@ -259,11 +267,10 @@ export class Player {
   }
 
   public consumeAmmo(): boolean {
-    if (this.state.ammo > 0) {
-      this.state.ammo--
-      return true
-    }
-    return false
+    // Infinite ammo - always return true
+    // Keep ammo display at a reasonable number for UI
+    this.state.ammo = Math.max(1, this.state.ammo)
+    return true
   }
 
   public addAmmo(amount: number): void {

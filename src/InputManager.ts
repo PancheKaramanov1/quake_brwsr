@@ -15,6 +15,8 @@ export class InputManager {
   }
 
   private keys: { [key: string]: boolean } = {}
+  private shootPressed = false // Track if shoot key was just pressed
+  private flightPressed = false // Track if flight key was just pressed
   private pointerLocked = false
 
   constructor(private canvas: HTMLCanvasElement) {
@@ -41,11 +43,22 @@ export class InputManager {
 
   private onKeyDown(event: KeyboardEvent): void {
     console.log('Key down:', event.code) // Debug: Check if keys are being detected
+    
+    // Handle one-shot inputs (only trigger on first press)
+    if (event.code === 'KeyF' && !this.keys['KeyF']) {
+      this.shootPressed = true
+      console.log('Shoot key pressed!')
+    }
+    if (event.code === 'KeyG' && !this.keys['KeyG']) {
+      this.flightPressed = true
+      console.log('Flight key pressed!')
+    }
+    
     this.keys[event.code] = true
     this.updateInputState()
     
     // Prevent default for game keys
-    if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'ShiftRight', 'KeyF'].includes(event.code)) {
+    if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'ShiftRight', 'KeyF', 'KeyG'].includes(event.code)) {
       event.preventDefault()
     }
   }
@@ -56,15 +69,17 @@ export class InputManager {
   }
 
   private onMouseDown(event: MouseEvent): void {
-    if (event.button === 0) { // Left mouse button
-      this.inputState.shoot = true
-    }
+    // Mouse no longer used for shooting
+    // if (event.button === 0) { // Left mouse button
+    //   this.inputState.shoot = true
+    // }
   }
 
   private onMouseUp(event: MouseEvent): void {
-    if (event.button === 0) { // Left mouse button
-      this.inputState.shoot = false
-    }
+    // Mouse no longer used for shooting  
+    // if (event.button === 0) { // Left mouse button
+    //   this.inputState.shoot = false
+    // }
   }
 
   private onMouseMove(event: MouseEvent): void {
@@ -81,7 +96,8 @@ export class InputManager {
     this.inputState.right = this.keys['KeyD'] || false
     this.inputState.jump = this.keys['Space'] || false
     this.inputState.dash = this.keys['ShiftLeft'] || this.keys['ShiftRight'] || false
-    this.inputState.flight = this.keys['KeyF'] || false
+    this.inputState.shoot = this.shootPressed  // Use one-shot flag
+    this.inputState.flight = this.flightPressed  // Use one-shot flag
   }
 
   private requestPointerLock(): void {
@@ -91,8 +107,20 @@ export class InputManager {
   public getInputState(): InputState {
     // Reset mouse movement after reading
     const state = { ...this.inputState }
+    
+    // Debug: Log current input state
+    if (state.forward || state.backward || state.left || state.right || state.shoot) {
+      console.log('InputManager returning state:', state)
+    }
+    
+    // Reset one-shot inputs after reading
     this.inputState.mouseX = 0
     this.inputState.mouseY = 0
+    this.shootPressed = false
+    this.flightPressed = false
+    this.inputState.shoot = false
+    this.inputState.flight = false
+    
     return state
   }
 
