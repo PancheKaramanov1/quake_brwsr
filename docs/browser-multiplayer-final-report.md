@@ -4,7 +4,7 @@
 Initial branch: master
 Initial HEAD: a946c734faf918c9b26180cd0a42317f3913a3b6
 Final branch: feat/browser-multiplayer
-Final HEAD: 327cc142623940dc2f0e61502ff19e9d8f73508a
+Final HEAD: d1ee23df347594bc83396cbc18c3f7807ef666ae
 Client build: PASS (vite build)
 Server build: PASS (esbuild → dist-server/index.js)
 Unit tests: PASS (included in vitest run)
