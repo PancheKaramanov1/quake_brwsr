@@ -1,4 +1,4 @@
-import { Vector3, Mesh, MeshBuilder, Scene, StandardMaterial, Color3, PhysicsImpostor, HemisphericLight, DirectionalLight } from '@babylonjs/core'
+import { Vector3, Mesh, MeshBuilder, Scene, StandardMaterial, Color3, HemisphericLight, DirectionalLight } from '@babylonjs/core'
 
 export class Arena {
   private meshes: Mesh[] = []
@@ -10,7 +10,7 @@ export class Arena {
 
   private createArena(): void {
     // Create ground plane
-    const ground = this.createGround()
+    this.createGround()
     
     // Create walls around the arena
     this.createWalls()

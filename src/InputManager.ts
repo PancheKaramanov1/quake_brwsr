@@ -81,7 +81,7 @@ export class InputManager {
     }
   }
 
-  private onMouseUp(event: MouseEvent): void {
+  private onMouseUp(_event: MouseEvent): void {
     // Mouse shooting uses one-shot system, no need to handle mouse up
   }
 

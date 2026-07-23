@@ -1,75 +1,71 @@
 import { Game } from './Game.js'
+import { MultiplayerMenu } from './client/ui/MultiplayerMenu.js'
+import { MultiplayerGame } from './client/MultiplayerGame.js'
 
-// Main entry point for the FPS game
-async function main(): Promise<void> {
-  try {
-    // Get the canvas element
-    const canvas = document.getElementById('gameCanvas') as HTMLCanvasElement
-    if (!canvas) {
-      throw new Error('Game canvas not found!')
-    }
+async function startSinglePlayer(canvas: HTMLCanvasElement): Promise<() => void> {
+  const game = new Game(canvas)
+  await game.init()
+  game.start()
 
-    // Create game instance
-    console.log('Creating game instance...')
-    const game = new Game(canvas)
-    
-    // Initialize the game
-    console.log('Initializing FPS game...')
-    await game.init()
-    console.log('Game initialization complete!')
-    
-    // Start the game
-    console.log('Starting game...')
-    game.start()
-    console.log('Game started successfully!')
-    
-    // Make game globally accessible for debugging
-    ;(window as any).game = game
-    
-    // Handle page visibility changes to pause/resume game
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) {
-        game.stop()
-      } else {
-        game.start()
-      }
-    })
-    
-    // Handle cleanup on page unload
-    window.addEventListener('beforeunload', () => {
-      game.dispose()
-    })
-    
-  } catch (error) {
-    console.error('Failed to start FPS game:', error)
-    
-    // Display error message to user
-    const errorMessage = document.createElement('div')
-    errorMessage.style.cssText = `
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      background: rgba(255, 0, 0, 0.9);
-      color: white;
-      padding: 20px;
-      border-radius: 10px;
-      font-family: Arial, sans-serif;
-      text-align: center;
-      z-index: 1000;
-    `
-    errorMessage.innerHTML = `
-      <h3>Failed to Start Game</h3>
-      <p>${error instanceof Error ? error.message : 'Unknown error occurred'}</p>
-      <p>Please check the console for more details.</p>
-    `
-    document.body.appendChild(errorMessage)
+  const onVis = () => {
+    if (document.hidden) game.stop()
+    else game.start()
+  }
+  document.addEventListener('visibilitychange', onVis)
+
+  return () => {
+    document.removeEventListener('visibilitychange', onVis)
+    game.dispose()
   }
 }
 
-// Start the game when the page loads
+async function main(): Promise<void> {
+  const canvas = document.getElementById('gameCanvas')
+  if (!(canvas instanceof HTMLCanvasElement)) {
+    throw new Error('Game canvas not found!')
+  }
+
+  let disposeSession: (() => void) | null = null
+  let mpGame: MultiplayerGame | null = null
+
+  const menu = new MultiplayerMenu(document.body, {
+    onSinglePlayer: () => {
+      void (async () => {
+        menu.hide()
+        disposeSession = await startSinglePlayer(canvas)
+      })()
+    },
+    onConnect: (displayName, serverUrl) => {
+      void (async () => {
+        menu.setStatus('Connecting…')
+        try {
+          mpGame?.dispose()
+          mpGame = new MultiplayerGame(canvas, document.body)
+          await mpGame.startSession(serverUrl, displayName)
+          menu.hide()
+          disposeSession = () => {
+            mpGame?.dispose()
+            mpGame = null
+          }
+        } catch (err) {
+          menu.show()
+          menu.showReject(
+            err instanceof Error ? err.message : 'Connection failed',
+          )
+        }
+      })()
+    },
+  })
+
+  window.addEventListener('beforeunload', () => {
+    disposeSession?.()
+  })
+}
+
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', main)
+  document.addEventListener('DOMContentLoaded', () => {
+    void main()
+  })
 } else {
-  main()
-} 
+  void main()
+}

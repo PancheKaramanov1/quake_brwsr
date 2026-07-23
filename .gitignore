@@ -19,6 +19,11 @@ out/
 .env.development.local
 .env.test.local
 .env.production.local
+.env.example.local
+
+# Server build
+dist-server/
+
 
 # Logs
 logs

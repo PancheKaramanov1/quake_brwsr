@@ -1,4 +1,4 @@
-import { Vector3, FreeCamera, Scene, Mesh, Ray, PhysicsImpostor } from '@babylonjs/core'
+import { Vector3, FreeCamera, Scene, Mesh } from '@babylonjs/core'
 import { GameConfig, InputState, PlayerState } from './types.js'
 
 export class Player {
@@ -236,11 +236,8 @@ export class Player {
     }
   }
 
-  private checkGroundContact(): void {
-    // Simple ground check (no physics ray casting)
-    // Assume player is on ground if Y position is low enough
-    this.state.onGround = this.mesh.position.y <= 2.0
-  }
+  // ground contact derived in applyGravityAndJump
+
 
   private updateCameraPosition(): void {
     // Keep camera at head level above the physics body

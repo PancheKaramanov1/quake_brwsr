@@ -1,4 +1,4 @@
-import { Vector3, Mesh, Scene, StandardMaterial, Color3, PhysicsImpostor, Ray, ParticleSystem, Texture } from '@babylonjs/core'
+import { Vector3, Mesh, Scene, StandardMaterial, Color3, Color4, ParticleSystem, Texture } from '@babylonjs/core'
 import { Projectile, WeaponConfig } from './types.js'
 
 export class WeaponSystem {
@@ -98,9 +98,9 @@ export class WeaponSystem {
     particleSystem.maxEmitBox = new Vector3(0.05, 0.05, 0.1)
     
     // Colors
-    particleSystem.color1 = new Color3(1, 0.5, 0)
-    particleSystem.color2 = new Color3(1, 0, 0)
-    particleSystem.colorDead = new Color3(0.3, 0.1, 0)
+    particleSystem.color1 = new Color4(1, 0.5, 0, 1)
+    particleSystem.color2 = new Color4(1, 0, 0, 1)
+    particleSystem.colorDead = new Color4(0.3, 0.1, 0, 0)
     
     // Size
     particleSystem.minSize = 0.1
@@ -196,9 +196,9 @@ export class WeaponSystem {
     explosion.maxEmitBox = new Vector3(0.5, 0.5, 0.5)
     
     // Colors
-    explosion.color1 = new Color3(1, 1, 0)
-    explosion.color2 = new Color3(1, 0.5, 0)
-    explosion.colorDead = new Color3(0.3, 0.1, 0)
+    explosion.color1 = new Color4(1, 1, 0, 1)
+    explosion.color2 = new Color4(1, 0.5, 0, 1)
+    explosion.colorDead = new Color4(0.3, 0.1, 0, 0)
     
     // Size
     explosion.minSize = 0.2
