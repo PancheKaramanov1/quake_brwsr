@@ -1,5 +1,11 @@
+import { randomBytes } from 'node:crypto'
 import type WebSocket from 'ws'
 import { RateLimiter } from '../security/RateLimiter.js'
+
+/** Short process-local connection id — not derived from IP, not a reconnect token. */
+export function createConnectionId(): string {
+  return randomBytes(4).toString('hex')
+}
 
 export class ClientConnection {
   sessionId: string | null = null
@@ -7,13 +13,16 @@ export class ClientConnection {
   lastMessageAt = Date.now()
   lastAckSeq = 0
   rateLimiter: RateLimiter | null = null
+  /** @deprecated Prefer connectionId — kept empty for privacy; never store raw IPs. */
   readonly remoteAddress: string
+  readonly connectionId: string
 
   constructor(
     private readonly socket: WebSocket,
-    remoteAddress: string,
+    connectionId: string = createConnectionId(),
   ) {
-    this.remoteAddress = remoteAddress
+    this.connectionId = connectionId
+    this.remoteAddress = ''
   }
 
   get isOpen(): boolean {

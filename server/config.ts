@@ -20,11 +20,14 @@ export const ALLOWED_ORIGINS_DEFAULT = [
   'http://127.0.0.1:3000',
 ]
 
+export const DEFAULT_CLIENT_DIST = 'dist'
+
 export interface ServerConfig {
   host: string
   port: number
   publicUrl: string
   wsPath: string
+  clientDist: string
   tickRate: number
   snapshotRate: number
   maxPlayers: number
@@ -38,7 +41,7 @@ export interface ServerConfig {
   isProduction: boolean
   serverName: string
   region: string
-  /** When true, trust X-Forwarded-For for logging only (never for auth). */
+  /** When true, trust X-Forwarded-For was historically used for logging only (never for auth). Ignored for privacy-safe logs. */
   trustProxy: boolean
 }
 
@@ -55,8 +58,72 @@ function requireFinitePositive(name: string, value: number): number {
   return value
 }
 
+/**
+ * Strict port parse: integer string only, range 1–65535.
+ * Rejects decimals, negatives, empty, and non-numeric values.
+ */
+export function parseListenPort(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw === '') {
+    return fallback
+  }
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`Invalid listen port: ${raw}`)
+  }
+  const port = Number(raw)
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid listen port: ${raw}`)
+  }
+  return port
+}
+
+/** Prefer Railway PORT, then SERVER_PORT, then local default 8080. */
+export function resolveListenPort(env: NodeJS.ProcessEnv): number {
+  const raw = env.PORT ?? env.SERVER_PORT
+  if (raw === undefined || raw === '') {
+    return DEFAULT_SERVER_PORT
+  }
+  return parseListenPort(raw, DEFAULT_SERVER_PORT)
+}
+
+export function normalizePublicUrl(raw: string): string {
+  const trimmed = raw.trim().replace(/\/+$/, '')
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    throw new Error(`Invalid public URL: ${raw}`)
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`Invalid public URL protocol: ${parsed.protocol}`)
+  }
+  if (!parsed.hostname) {
+    throw new Error(`Invalid public URL: ${raw}`)
+  }
+  parsed.pathname = ''
+  parsed.search = ''
+  parsed.hash = ''
+  return parsed.toString().replace(/\/$/, '')
+}
+
+export function resolvePublicUrl(
+  env: NodeJS.ProcessEnv,
+  host: string,
+  port: number,
+): string {
+  if (env.PUBLIC_SERVER_URL && env.PUBLIC_SERVER_URL.trim() !== '') {
+    return normalizePublicUrl(env.PUBLIC_SERVER_URL)
+  }
+  const railwayDomain = env.RAILWAY_PUBLIC_DOMAIN?.trim()
+  if (railwayDomain) {
+    const hostOnly = railwayDomain.replace(/^https?:\/\//i, '').replace(/\/+$/, '')
+    return normalizePublicUrl(`https://${hostOnly}`)
+  }
+  const displayHost = host === '0.0.0.0' ? 'localhost' : host
+  return normalizePublicUrl(`http://${displayHost}:${port}`)
+}
+
 export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
-  const port = Number(env.SERVER_PORT ?? DEFAULT_SERVER_PORT)
+  const port = resolveListenPort(env)
   const host = env.SERVER_HOST ?? DEFAULT_SERVER_HOST
   const isProduction = env.NODE_ENV === 'production'
   const allowedOrigins = parseOrigins(env.ALLOWED_ORIGINS)
@@ -64,15 +131,21 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
   if (isProduction && allowedOrigins.includes('*')) {
     throw new Error('Refusing production start with ALLOWED_ORIGINS=*')
   }
+  if (isProduction && (!env.ALLOWED_ORIGINS || env.ALLOWED_ORIGINS.trim() === '')) {
+    throw new Error('Refusing production start with empty ALLOWED_ORIGINS')
+  }
   if (isProduction && allowedOrigins.length === 0) {
     throw new Error('Refusing production start with empty ALLOWED_ORIGINS')
   }
 
+  const publicUrl = resolvePublicUrl(env, host, port)
+
   const config: ServerConfig = {
     host,
-    port: requireFinitePositive('SERVER_PORT', port),
-    publicUrl: env.PUBLIC_SERVER_URL ?? `http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`,
+    port,
+    publicUrl,
     wsPath: env.WS_PATH ?? DEFAULT_WS_PATH,
+    clientDist: (env.CLIENT_DIST ?? DEFAULT_CLIENT_DIST).trim() || DEFAULT_CLIENT_DIST,
     tickRate: requireFinitePositive('SERVER_TICK_RATE', Number(env.SERVER_TICK_RATE ?? TICK_RATE)),
     snapshotRate: requireFinitePositive('SNAPSHOT_RATE', Number(env.SNAPSHOT_RATE ?? SNAPSHOT_RATE)),
     maxPlayers: requireFinitePositive('MAX_PLAYERS', Number(env.MAX_PLAYERS ?? MAX_PLAYERS)),
@@ -109,6 +182,9 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
   }
   if (config.wsPath[0] !== '/') {
     throw new Error('WS_PATH must start with /')
+  }
+  if (config.wsPath.includes('?') || config.wsPath.includes('#')) {
+    throw new Error('WS_PATH must be a path only')
   }
 
   return config

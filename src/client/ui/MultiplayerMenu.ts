@@ -1,7 +1,13 @@
 /** DOM overlay menu for single-player / multiplayer entry. */
 
-import { PROTOCOL_VERSION } from '../../shared/simulation/constants.js'
+import { PROTOCOL_VERSION, SERVER_RESTART_MESSAGE } from '../../shared/simulation/constants.js'
 import { RejectReason, type StandingEntry } from '../../shared/protocol/messages.js'
+import {
+  clearLegacyMultiplayerStorage,
+  resolveDefaultHttpBase,
+  resolveDefaultServerUrl,
+  wsUrlFromPublicStatus,
+} from '../net/serverUrls.js'
 
 export type MenuMode = 'main' | 'multiplayer' | 'results' | 'hidden'
 
@@ -25,26 +31,19 @@ export interface DiscoveredServer {
   publicUrl: string
 }
 
-function defaultHttpBase(): string {
-  const envUrl = import.meta.env.VITE_GAME_SERVER_HTTP_URL
-  if (typeof envUrl === 'string' && envUrl.length > 0) return envUrl.replace(/\/$/, '')
-  const ws = defaultServerUrl()
-  try {
-    const u = new URL(ws)
-    u.protocol = u.protocol === 'wss:' ? 'https:' : 'http:'
-    u.pathname = ''
-    u.search = ''
-    u.hash = ''
-    return u.toString().replace(/\/$/, '')
-  } catch {
-    return 'http://localhost:8080'
+function viteEnv(): { VITE_GAME_SERVER_URL?: string; VITE_GAME_SERVER_HTTP_URL?: string } {
+  return {
+    VITE_GAME_SERVER_URL: import.meta.env.VITE_GAME_SERVER_URL as string | undefined,
+    VITE_GAME_SERVER_HTTP_URL: import.meta.env.VITE_GAME_SERVER_HTTP_URL as string | undefined,
   }
 }
 
+function defaultHttpBase(): string {
+  return resolveDefaultHttpBase(window.location, viteEnv())
+}
+
 function defaultServerUrl(): string {
-  const envUrl = import.meta.env.VITE_GAME_SERVER_URL
-  if (typeof envUrl === 'string' && envUrl.length > 0) return envUrl
-  return 'ws://localhost:8080/ws'
+  return resolveDefaultServerUrl(window.location, viteEnv())
 }
 
 function rejectMessage(reason: RejectReason | string | null | undefined, fallback?: string): string {
@@ -60,7 +59,7 @@ function rejectMessage(reason: RejectReason | string | null | undefined, fallbac
       case RejectReason.Banned:
         return 'You are banned from this server.'
       case RejectReason.Shutdown:
-        return 'Server is shutting down.'
+        return SERVER_RESTART_MESSAGE
       case RejectReason.AuthFailed:
         return 'Reconnect authentication failed.'
       case RejectReason.Duplicate:
@@ -70,21 +69,6 @@ function rejectMessage(reason: RejectReason | string | null | undefined, fallbac
     }
   }
   return fallback ?? 'Connection rejected.'
-}
-
-function wsUrlFromStatus(status: Record<string, unknown>): string {
-  const publicUrl = String(status.publicUrl ?? defaultHttpBase())
-  const wsPath = String(status.wsPath ?? '/ws')
-  try {
-    const u = new URL(publicUrl)
-    u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
-    u.pathname = wsPath
-    u.search = ''
-    u.hash = ''
-    return u.toString()
-  } catch {
-    return defaultServerUrl()
-  }
 }
 
 export class MultiplayerMenu {
@@ -97,6 +81,8 @@ export class MultiplayerMenu {
   private readonly reconnectEl: HTMLParagraphElement
   private readonly serverInfoEl: HTMLDivElement
   private readonly advancedUrlInput: HTMLInputElement
+  /** Page-memory only — never written to localStorage. */
+  private sessionDisplayName = 'Player'
   private mode: MenuMode = 'main'
   private discovered: DiscoveredServer | null = null
 
@@ -104,6 +90,10 @@ export class MultiplayerMenu {
     private readonly parent: HTMLElement,
     private readonly callbacks: MultiplayerMenuCallbacks,
   ) {
+    clearLegacyMultiplayerStorage(
+      typeof localStorage !== 'undefined' ? localStorage : null,
+    )
+
     this.root = document.createElement('div')
     this.root.id = 'mp-menu-root'
     Object.assign(this.root.style, {
@@ -157,6 +147,13 @@ export class MultiplayerMenu {
   showReconnectStatus(text: string): void {
     this.reconnectEl.textContent = text
     this.reconnectEl.style.display = text ? 'block' : 'none'
+  }
+
+  /** Surface a live-server restart and return the player to the multiplayer menu. */
+  showServerRestart(): void {
+    this.setMode('multiplayer')
+    this.setStatus(SERVER_RESTART_MESSAGE, true)
+    this.showReconnectStatus(SERVER_RESTART_MESSAGE)
   }
 
   showResults(standings: StandingEntry[]): void {
@@ -221,7 +218,7 @@ export class MultiplayerMenu {
       const joinAvailable = Boolean(data.joinAvailable)
       const players = Number(data.players ?? 0)
       const maxPlayers = Number(data.maxPlayers ?? 12)
-      const wsUrl = wsUrlFromStatus(data)
+      const wsUrl = wsUrlFromPublicStatus(data, base, defaultServerUrl())
       this.discovered = {
         serverName: String(data.serverName ?? 'Server'),
         region: String(data.region ?? 'local'),
@@ -286,7 +283,10 @@ export class MultiplayerMenu {
     nameInput.type = 'text'
     nameInput.maxLength = 16
     nameInput.placeholder = 'Player'
-    nameInput.value = localStorage.getItem('mp_display_name') ?? 'Player'
+    nameInput.value = this.sessionDisplayName
+    nameInput.addEventListener('input', () => {
+      this.sessionDisplayName = nameInput.value
+    })
     this.styleInput(nameInput)
 
     const serverInfo = document.createElement('div')
@@ -322,7 +322,8 @@ export class MultiplayerMenu {
         this.setStatus('Enter a display name.', true)
         return
       }
-      localStorage.setItem('mp_display_name', name)
+      this.sessionDisplayName = name
+      // Intentionally do not persist name or server URL.
       const url =
         this.discovered?.wsUrl ??
         this.advancedUrlInput.value.trim() ??
@@ -335,7 +336,6 @@ export class MultiplayerMenu {
         this.setStatus('Server is full or not joining.', true)
         return
       }
-      localStorage.setItem('mp_server_url', url)
       this.setStatus('Connecting…')
       this.callbacks.onConnect(name, url)
     })
@@ -353,7 +353,7 @@ export class MultiplayerMenu {
     const urlInput = document.createElement('input')
     urlInput.id = 'mp-url'
     urlInput.type = 'text'
-    urlInput.value = localStorage.getItem('mp_server_url') ?? defaultServerUrl()
+    urlInput.value = defaultServerUrl()
     this.styleInput(urlInput)
     advancedToggle.append(summary, urlLabel, urlInput)
 

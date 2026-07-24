@@ -2,8 +2,9 @@ import http from 'node:http'
 import { WebSocketServer, type WebSocket } from 'ws'
 import type { ServerConfig } from './config.js'
 import { MatchInstance } from './match/MatchInstance.js'
-import { ClientConnection } from './network/ClientConnection.js'
+import { ClientConnection, createConnectionId } from './network/ClientConnection.js'
 import { SecurityLogger } from './security/SecurityLogger.js'
+import { tryServeStatic } from './staticAssets.js'
 
 export class GameServer {
   private httpServer: http.Server | null = null
@@ -34,9 +35,12 @@ export class GameServer {
         }
         const origin = info.origin ?? ''
         if (!this.isOriginAllowed(origin)) {
-          this.securityLog.rejectedConnection(info.req.socket.remoteAddress ?? '?', 'origin')
+          this.securityLog.rejectedConnection('origin')
           done(false, 403, 'Origin not allowed')
           return
+        }
+        if (this.match.activePlayerCount() >= this.config.maxPlayers) {
+          // Soft signal — Hello will still reject with Full; keep verify open for reconnects.
         }
         done(true)
       },
@@ -55,7 +59,7 @@ export class GameServer {
     this.match.start()
     this.networkReady = true
     console.log(
-      `[server] listening on http://${this.config.host}:${this.config.port} ws path ${this.config.wsPath}`,
+      `server_started host=${this.config.host} port=${this.config.port} ws_path=${this.config.wsPath}`,
     )
   }
 
@@ -66,16 +70,8 @@ export class GameServer {
     return this.config.allowedOrigins.includes(origin)
   }
 
-  private onConnection(socket: WebSocket, req: http.IncomingMessage): void {
-    let addr = req.socket.remoteAddress ?? 'unknown'
-    if (this.config.trustProxy) {
-      const fwd = req.headers['x-forwarded-for']
-      if (typeof fwd === 'string' && fwd.length > 0) {
-        // Logging only — never used for auth decisions
-        addr = fwd.split(',')[0]?.trim() || addr
-      }
-    }
-    const conn = new ClientConnection(socket, addr)
+  private onConnection(socket: WebSocket, _req: http.IncomingMessage): void {
+    const conn = new ClientConnection(socket, createConnectionId())
 
     socket.on('message', (raw) => {
       const buf =
@@ -111,15 +107,30 @@ export class GameServer {
     )
   }
 
-  private handleHttp(req: http.IncomingMessage, res: http.ServerResponse): void {
-    const url = (req.url ?? '/').split('?')[0] ?? '/'
-    const cors = {
+  private corsHeaders(): Record<string, string> {
+    return {
       'Access-Control-Allow-Origin': this.config.isProduction
         ? this.config.allowedOrigins[0] ?? ''
         : '*',
-      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type',
     }
+  }
+
+  private writeStatus(res: http.ServerResponse, cors: Record<string, string>): void {
+    res.writeHead(200, { 'Content-Type': 'application/json', ...cors })
+    const status = this.match.getPublicStatus()
+    res.end(
+      JSON.stringify({
+        ...status,
+        servers: [status],
+      }),
+    )
+  }
+
+  private handleHttp(req: http.IncomingMessage, res: http.ServerResponse): void {
+    const url = (req.url ?? '/').split('?')[0] ?? '/'
+    const cors = this.corsHeaders()
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204, cors)
@@ -145,16 +156,13 @@ export class GameServer {
       )
       return
     }
-    if (url === '/status' || url === '/api/servers' || url === '/api/servers/') {
-      res.writeHead(200, { 'Content-Type': 'application/json', ...cors })
-      const status = this.match.getPublicStatus()
-      // Directory-shaped response for future multi-server replacement
-      res.end(
-        JSON.stringify({
-          ...status,
-          servers: [status],
-        }),
-      )
+    if (
+      url === '/status' ||
+      url === '/server-status' ||
+      url === '/api/servers' ||
+      url === '/api/servers/'
+    ) {
+      this.writeStatus(res, cors)
       return
     }
     if (url === '/metrics') {
@@ -164,20 +172,69 @@ export class GameServer {
       res.end(JSON.stringify(metrics))
       return
     }
+
+    const staticResult = tryServeStatic(req, res, {
+      clientDist: this.config.clientDist,
+      extraHeaders: cors,
+    })
+    if (staticResult.kind !== 'skipped' && staticResult.kind !== 'not_found') {
+      return
+    }
+    if (staticResult.kind === 'not_found' && (url === '/' || !url.includes('.'))) {
+      // tryServeStatic already wrote 404 when dist missing / no index
+      if (res.headersSent) return
+    }
+    if (res.headersSent) return
+
     res.writeHead(404, { 'Content-Type': 'text/plain', ...cors })
     res.end('Not found')
   }
 
-  async shutdown(): Promise<void> {
+  /**
+   * Graceful shutdown:
+   * 1 stop accepting  2 ready→503  3 notify clients  4 close sockets
+   * 5 stop sim  6 clear timers  7 close WSS  8 close HTTP
+   */
+  async shutdown(options?: {
+    /** Test hook: resolve before HTTP close (HTTP still serves /ready as 503). */
+    beforeCloseHttp?: Promise<void>
+    /** Test hook: replace HTTP close (must eventually close or hang intentionally). */
+    closeHttp?: () => Promise<void>
+    closeWss?: () => Promise<void>
+  }): Promise<void> {
     this.accepting = false
     this.networkReady = false
     this.match.notifyShutdown()
     this.match.stop()
-    await new Promise<void>((resolve) => {
-      this.wss?.close(() => resolve())
-    })
-    await new Promise<void>((resolve) => {
-      this.httpServer?.close(() => resolve())
-    })
+
+    const closeWss =
+      options?.closeWss ??
+      (() =>
+        new Promise<void>((resolve) => {
+          if (!this.wss) {
+            resolve()
+            return
+          }
+          this.wss.close(() => resolve())
+        }))
+
+    const closeHttp =
+      options?.closeHttp ??
+      (() =>
+        new Promise<void>((resolve) => {
+          if (!this.httpServer) {
+            resolve()
+            return
+          }
+          this.httpServer.close(() => resolve())
+        }))
+
+    await closeWss()
+    if (options?.beforeCloseHttp) {
+      await options.beforeCloseHttp
+    }
+    await closeHttp()
+    this.wss = null
+    this.httpServer = null
   }
 }

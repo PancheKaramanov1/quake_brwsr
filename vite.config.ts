@@ -1,16 +1,17 @@
 import { defineConfig } from 'vite'
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   server: {
     port: 3000,
-    open: true
+    open: true,
   },
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
-    sourcemap: true
+    // Production must not ship source maps to public clients.
+    sourcemap: mode !== 'production',
   },
   optimizeDeps: {
-    exclude: ['@babylonjs/havok']
-  }
-}) 
+    exclude: ['@babylonjs/havok'],
+  },
+}))
