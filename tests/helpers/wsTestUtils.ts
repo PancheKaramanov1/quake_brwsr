@@ -32,6 +32,9 @@ export function createTestServerConfig(overrides: Partial<ServerConfig> = {}): S
     heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
     connectionTimeoutMs: Math.max(CONNECTION_TIMEOUT_MS, 60_000),
     isProduction: false,
+    serverName: 'Test Arena',
+    region: 'test',
+    trustProxy: false,
     ...overrides,
   }
 }
@@ -167,10 +170,33 @@ export function waitForMessageType(
 
 export async function fetchMetrics(
   port: number,
-): Promise<Record<string, number | string>> {
+): Promise<Record<string, number | string | Record<string, number>>> {
   const res = await fetch(`http://127.0.0.1:${port}/metrics`)
   if (!res.ok) {
     throw new Error(`GET /metrics failed: ${res.status}`)
   }
-  return (await res.json()) as Record<string, number | string>
+  return (await res.json()) as Record<string, number | string | Record<string, number>>
+}
+
+export async function fetchStatus(port: number): Promise<Record<string, unknown>> {
+  const res = await fetch(`http://127.0.0.1:${port}/status`)
+  if (!res.ok) {
+    throw new Error(`GET /status failed: ${res.status}`)
+  }
+  return (await res.json()) as Record<string, unknown>
+}
+
+export async function fetchReady(port: number): Promise<{ ready: boolean; status: number }> {
+  const res = await fetch(`http://127.0.0.1:${port}/ready`)
+  const body = (await res.json()) as { ready: boolean }
+  return { ready: body.ready, status: res.status }
+}
+
+export function httpToWsUrl(httpUrl: string, wsPath = DEFAULT_WS_PATH): string {
+  const u = new URL(httpUrl)
+  u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
+  u.pathname = wsPath
+  u.search = ''
+  u.hash = ''
+  return u.toString()
 }

@@ -33,6 +33,19 @@ Twenty spawn points across zones (courtyard corners, wings, atrium mid/high, roo
 
 Server combat uses `pickBestSpawn` (shared `combat.ts`) to prefer safer points when respawning.
 
+## Single-player vs multiplayer map
+
+| Mode | Map |
+| ---- | --- |
+| Multiplayer | Shared `ARENA_MAP` / `reactor-atrium-v1` (client + server) |
+| Single-player | Legacy Babylon `Arena.ts` + AI enemies (intentional) |
+
+Movement and rocket combat **constants** are unified via `src/shared/simulation/constants.ts` so damage/speed/fire-rate cannot silently drift. Full SP migration onto Reactor Atrium is deferred to avoid breaking enemy placements.
+
+## Validation
+
+`tests/unit/map.test.ts` asserts ≥16 spawns, ≥3 elevations, zone coverage, bounds, separation, AABB validity, and spawn clearance from solids.
+
 ## Design goals for this layout
 
 - **Verticality** — ground, mid, and high fights; rocket splash punishes clustering on small pads

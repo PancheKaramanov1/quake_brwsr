@@ -92,4 +92,40 @@ describe('GameServer integration', () => {
     await server.shutdown()
     server = null
   }, 20_000)
+
+  it('exposes /status discovery and readiness semantics', async () => {
+    const port = await getFreePort()
+    server = new GameServer(
+      createTestServerConfig({
+        port,
+        publicUrl: `http://127.0.0.1:${port}`,
+        serverName: 'DiscoveryTest',
+        region: 'ci',
+      }),
+    )
+    await server.start()
+    const ready = await fetch(`http://127.0.0.1:${port}/ready`)
+    expect(ready.status).toBe(200)
+    const readyBody = (await ready.json()) as { ready: boolean; simulationReady: boolean }
+    expect(readyBody.ready).toBe(true)
+    expect(readyBody.simulationReady).toBe(true)
+
+    const statusRes = await fetch(`http://127.0.0.1:${port}/status`)
+    expect(statusRes.status).toBe(200)
+    const status = (await statusRes.json()) as {
+      serverName: string
+      region: string
+      protocolVersion: number
+      joinAvailable: boolean
+      servers: unknown[]
+    }
+    expect(status.serverName).toBe('DiscoveryTest')
+    expect(status.region).toBe('ci')
+    expect(status.protocolVersion).toBe(PROTOCOL_VERSION)
+    expect(status.joinAvailable).toBe(true)
+    expect(status.servers.length).toBe(1)
+
+    await server.shutdown()
+    server = null
+  }, 15_000)
 })

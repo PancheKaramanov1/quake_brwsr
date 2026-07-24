@@ -24,24 +24,25 @@ ALLOWED_ORIGINS=https://play.example.com
 MAX_PLAYERS=12
 SERVER_TICK_RATE=60
 SNAPSHOT_RATE=20
+SERVER_NAME=Reactor Atrium FFA
+SERVER_REGION=us-east
 LOG_LEVEL=info
+TRUST_PROXY=false
 ```
 
-Client build:
+Production **refuses** `ALLOWED_ORIGINS=*`. Client build:
 
 ```bash
-VITE_GAME_SERVER_URL=wss://game.example.com/ws npm run build
+VITE_GAME_SERVER_URL=wss://game.example.com/ws \
+VITE_GAME_SERVER_HTTP_URL=https://game.example.com \
+npm run build
 ```
 
-In production, empty `Origin` on WebSocket upgrade is **rejected** (non-browser tools must send an allowed origin, or run outside prod). Do not leave `ALLOWED_ORIGINS=*` in production unless you accept open embedding.
+Normal player flow uses HTTP `/status` discovery — no manual WebSocket URL required. Advanced manual URL remains in the menu for development.
 
 ## Docker (server)
 
-`Dockerfile` multi-stage build:
-
-1. `npm ci` + `npm run server:build`
-2. Runtime image: `npm ci --omit=dev`, copy `dist-server/`, expose **8080**
-3. Healthcheck: `GET /health`
+Multi-stage build; runtime runs as non-root user `game`.
 
 ```bash
 docker build -t quake-brwsr-server .
@@ -56,13 +57,13 @@ docker run --rm -p 8080:8080 \
 
 | Path | Role |
 | ---- | ---- |
-| `GET /health` (also `/healthz`) | Liveness: `{ status, uptimeMs }` |
-| `GET /ready` (also `/readyz`) | Readiness while accepting connections |
-| `GET /metrics` | Tick timing, players, snapshot size, bytes in/out, phase |
-| `WS /ws` | Game protocol (configurable via `WS_PATH`) |
+| `GET /health` (`/healthz`) | Liveness |
+| `GET /ready` (`/readyz`) | Ready only when accepting **and** simulation + networking initialized |
+| `GET /status` (`/api/servers`) | Safe public match discovery (name, region, map, players, joinAvailable, protocol) |
+| `GET /metrics` | Tick/snapshot/bandwidth/heap counters — no tokens, IPs, or display names |
+| `WS /ws` | Game protocol |
 
-Use `/health` for container healthchecks and `/ready` for load balancer drain during shutdown (`SIGINT`/`SIGTERM` stop accepting and notify clients).
-
+Use `/health` for container healthchecks and `/ready` for load balancer drain during SIGTERM.
 ## nginx: HTTPS client + WSS reverse proxy
 
 Example: static client at `play.example.com`, game server on `127.0.0.1:8080`, public WSS at `game.example.com`.
@@ -96,6 +97,12 @@ server {
     }
     location /ready {
         proxy_pass http://127.0.0.1:8080/ready;
+    }
+    location /status {
+        proxy_pass http://127.0.0.1:8080/status;
+    }
+    location /api/servers {
+        proxy_pass http://127.0.0.1:8080/api/servers;
     }
     location /metrics {
         # Prefer restricting by IP or auth in real deployments

@@ -92,3 +92,6 @@ Thumbs.db
 # Temporary folders
 tmp/
 temp/ 
+# Hardening / soak artifacts
+artifacts/
+

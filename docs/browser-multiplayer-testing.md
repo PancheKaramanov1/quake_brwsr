@@ -2,63 +2,56 @@
 
 ## Runner
 
-Vitest (`vitest.config.ts`), Node environment, includes `tests/**/*.test.ts`.
-
 ```bash
-npm test                 # everything
+npm test                 # unit + simulation + protocol + integration (excludes long load)
 npm run test:unit        # unit + simulation + protocol
-npm run test:integration # GameServer + real WebSockets
-npm run test:load        # 12-player soak (~3s inputs; 120s timeout)
+npm run test:integration # GameServer + WebSockets + reconnect + /status
+npm run test:load        # 12-player combat ≥ 2 minutes
+npm run test:soak        # complete match + restart (SOAK_FULL_MATCH=1 → 600s)
+npm run test:network     # Good/Typical/Poor/Severe impairment profiles
+npm run test:browser     # discovery + 2-client combat + 12/13 reject harness
 npm run test:watch       # interactive
 ```
 
-Helpers: `tests/helpers/wsTestUtils.ts` (free port, connect, wait for message type, metrics fetch).
+Long suites use `vitest.load.config.ts`. Artifacts land in `artifacts/` (gitignored).
+
+Helpers: `tests/helpers/wsTestUtils.ts`, `tests/helpers/botClient.ts`.
 
 ## Suites
 
-| Path | What it covers |
-| ---- | -------------- |
-| `tests/unit/smoke.test.ts` | Harness smoke |
-| `tests/unit/map.test.ts` | Map id, spawns, AABB build |
-| `tests/simulation/movement.test.ts` | Fixed-tick movement / collision |
-| `tests/simulation/projectiles.test.ts` | Rocket flight / lifetime |
-| `tests/simulation/combat.test.ts` | Damage, splash, kill/respawn scoring |
-| `tests/protocol/codec.test.ts` | Encode/decode round-trips, version/size errors |
-| `tests/integration/server.test.ts` | Hello → Welcome, snapshots for 2 clients, full reject, shutdown |
-| `tests/load/twelvePlayers.test.ts` | 12 concurrent clients sending inputs; server stays up; metrics readable |
-
-## What to run when changing code
-
-| Change | Minimum tests |
-| ------ | ------------- |
-| Movement / colliders | `tests/simulation/movement.test.ts`, map unit |
-| Weapons / splash | `projectiles` + `combat` |
-| Wire format | `tests/protocol/codec.test.ts` |
-| Sessions / Hello / capacity | `tests/integration/server.test.ts` |
-| Tick / fan-out / capacity | `npm run test:load` |
+| Path | Coverage |
+| ---- | -------- |
+| `tests/unit/map.test.ts` | Spawns, zones, AABB validity, clearance, separation |
+| `tests/simulation/*` | Movement, projectiles, combat, adversarial |
+| `tests/protocol/*` | Codec + fuzz (empty/truncated/oversized/NaN floods) |
+| `tests/integration/*` | Hello/Welcome, capacity, `/status`, reconnect |
+| `tests/load/twelvePlayers.test.ts` | 12 bots, 2 min combat, 13th reject, metrics JSON |
+| `tests/load/soak.test.ts` | Full match end + restart; set `SOAK_FULL_MATCH=1` for 600s |
+| `tests/load/networkImpairment.test.ts` | Latency/jitter/loss/reorder/dup profiles |
+| `tests/browser/multiBrowser.test.ts` | Discovery + combat sync + 12/13 |
 
 ## Manual checklist (2 browsers)
 
 1. `npm run server:dev` and `npm run dev`
-2. Two clients join with different names; both appear in snapshots / scene
-3. Move, jump, dash — remotes interpolate; local feel predicts
-4. Rocket damage, death, respawn (~3 s), score update
-5. Fill server (`MAX_PLAYERS`) — next Hello gets `Reject` / Full
-6. Kill server or network — reconnect within grace or clean leave
-7. Wrong `protocolVersion` → version mismatch reject
+2. Multiplayer → Refresh → Join (no raw URL required)
+3. Two clients combat; remotes interpolate; rockets/damage/score sync
+4. Fill to 12 — thirteenth rejected clearly
+5. Disconnect / reconnect within grace
+6. Single-player still starts from main menu
 
-## Metrics during load
+## Metrics
 
 ```bash
 curl -s http://localhost:8080/metrics
+curl -s http://localhost:8080/status
 ```
 
-Useful fields: `players`, `tickP50` / `tickP95` / `tickMax`, `avgSnapshotBytes`, `bytesIn` / `bytesOut`, `errors`.
+Fields include tick P50/P95/P99/max, overruns, snapshot size percentiles, heap, reconnects, deaths, messagesByType (no tokens/IPs).
 
-## Gaps (known)
+## Environment knobs
 
-- No browser E2E (Playwright/Cypress) in-repo yet
-- No automated latency/loss injection suite (manual or proxy)
-- Load test is short (~3 s), not a 24h soak
-
-Add regression tests next to any new sim or protocol field before relying on manual play.
+| Var | Effect |
+| --- | ------ |
+| `LOAD_RUN_MS` | Load test duration (default 120000) |
+| `SOAK_MATCH_SECONDS` | Shortened soak match length when not full |
+| `SOAK_FULL_MATCH=1` | True 600s match + restart |

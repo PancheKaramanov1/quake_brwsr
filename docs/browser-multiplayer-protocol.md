@@ -35,7 +35,7 @@ Quantization (snapshots / corrections):
 | Type | Id | Purpose |
 | ---- | -- | ------- |
 | `Hello` | 1 | Join: `protocolVersion`, `displayName` |
-| `JoinMatch` | 2 | Reserved (`mapId`); currently no-op on server |
+| `JoinMatch` | 2 | Reserved (`mapId`); currently no-op — session discovery uses HTTP `GET /status` instead |
 | `ClientReady` | 3 | Reserved; currently no-op |
 | `InputCommand` | 4 | Movement / actions for prediction |
 | `Ping` | 5 | RTT: `clientTime` |

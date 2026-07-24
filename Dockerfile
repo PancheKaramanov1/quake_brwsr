@@ -11,9 +11,12 @@ RUN npm run server:build
 FROM node:20-alpine
 WORKDIR /app
 ENV NODE_ENV=production
+RUN addgroup -S game && adduser -S game -G game
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist-server ./dist-server
+RUN chown -R game:game /app
+USER game
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget -qO- http://127.0.0.1:8080/health || exit 1

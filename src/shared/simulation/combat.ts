@@ -137,6 +137,8 @@ export function scoreSpawn(
   enemies: ReadonlyArray<{ position: Vec3; alive: boolean }>,
   recentDeaths: ReadonlyArray<{ position: Vec3; age: number }>,
   recentSpawns: ReadonlyArray<{ spawnId: string; age: number }>,
+  rockets: ReadonlyArray<{ position: Vec3; alive: boolean }> = [],
+  recentDamage: ReadonlyArray<{ position: Vec3; age: number }> = [],
 ): number {
   let score = 1000
   for (const e of enemies) {
@@ -160,6 +162,18 @@ export function scoreSpawn(
       score -= 300
     }
   }
+  for (const rocket of rockets) {
+    if (!rocket.alive) continue
+    if (distanceVec3(spawn.position, rocket.position) < 12) {
+      score -= 220
+    }
+  }
+  for (const dmg of recentDamage) {
+    if (dmg.age < 4 && distanceXZ(spawn.position, dmg.position) < 12) {
+      score -= 100
+    }
+  }
+  // Slight preference for zone diversity when recently used same zone via spawn id prefix
   return score
 }
 
@@ -168,12 +182,17 @@ export function pickBestSpawn(
   enemies: ReadonlyArray<{ position: Vec3; alive: boolean }>,
   recentDeaths: ReadonlyArray<{ position: Vec3; age: number }>,
   recentSpawns: ReadonlyArray<{ spawnId: string; age: number }>,
+  rockets: ReadonlyArray<{ position: Vec3; alive: boolean }> = [],
+  recentDamage: ReadonlyArray<{ position: Vec3; age: number }> = [],
 ): SpawnCandidate {
-  let best = candidates[0]
+  if (candidates.length === 0) {
+    throw new Error('no_spawn_candidates')
+  }
+  let best = candidates[0]!
   let bestScore = -Infinity
   for (const c of candidates) {
-    const s = scoreSpawn(c, enemies, recentDeaths, recentSpawns)
-    if (s > bestScore) {
+    const s = scoreSpawn(c, enemies, recentDeaths, recentSpawns, rockets, recentDamage)
+    if (s > bestScore || (s === bestScore && c.id < best.id)) {
       bestScore = s
       best = c
     }

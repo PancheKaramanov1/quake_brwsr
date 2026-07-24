@@ -4,13 +4,16 @@ import {
   DISPLAY_NAME_MIN,
   DISPLAY_NAME_PATTERN,
   MAX_INPUTS_PER_SECOND,
+  MAX_INPUTS_PER_TICK,
   MAX_MESSAGE_BYTES,
   MAX_MESSAGES_PER_SECOND,
+  MAX_PENDING_INPUTS,
   MAX_PLAYERS,
   MIN_PLAYERS_TO_START,
   PRE_MATCH_COUNTDOWN_SECONDS,
   PROTOCOL_VERSION,
   SNAPSHOT_RATE,
+  TICK_BUDGET_MS,
   TICK_DT,
   TICK_RATE,
 } from '../../src/shared/simulation/constants.js'
@@ -40,6 +43,8 @@ export interface SessionRecord {
   lastSeq: number
   graceUntil: number
   connection: ClientConnection | null
+  pendingInputs: InputCommandPayload[]
+  droppedInputs: number
 }
 
 export class MatchInstance {
@@ -52,28 +57,56 @@ export class MatchInstance {
   metrics = {
     tickCount: 0,
     tickDurations: [] as number[],
+    tickOverruns: 0,
     snapshotBytes: 0,
     snapshotCount: 0,
+    snapshotSizes: [] as number[],
     bytesIn: 0,
     bytesOut: 0,
     connections: 0,
     rejects: 0,
     errors: 0,
+    invalidMessages: 0,
+    rateLimitViolations: 0,
+    movementViolations: 0,
+    weaponViolations: 0,
+    reconnectAttempts: 0,
+    reconnectSuccesses: 0,
+    matchStarts: 0,
+    matchCompletions: 0,
+    playerDeaths: 0,
+    messagesByType: {} as Record<string, number>,
+    peakPlayers: 0,
+    peakPendingInputs: 0,
   }
+  private simulationReady = false
+  private memStartBytes = 0
+  private memPeakBytes = 0
 
   constructor(
     private readonly config: ServerConfig,
     private readonly securityLog: SecurityLogger,
   ) {
     this.world.scoreLimit = config.scoreLimit
+    this.world.matchDurationSeconds = config.matchDurationSeconds
     this.world.timeRemaining = config.matchDurationSeconds
   }
+
+  get isSimulationReady(): boolean {
+    return this.simulationReady
+  }
+
+  private lastTickWallMs = 0
 
   start(): void {
     if (this.running) return
     this.running = true
+    this.memStartBytes = process.memoryUsage().heapUsed
+    this.memPeakBytes = this.memStartBytes
+    this.lastTickWallMs = Date.now()
     const intervalMs = 1000 / this.config.tickRate
     this.tickTimer = setInterval(() => this.tick(), intervalMs)
+    this.simulationReady = true
   }
 
   stop(): void {
@@ -132,6 +165,8 @@ export class MatchInstance {
         lastSeq: 0,
         graceUntil: 0,
         connection: conn,
+        pendingInputs: [],
+        droppedInputs: 0,
       }
       this.sessions.set(sessionId, session)
       this.playerToSession.set(player.id, sessionId)
@@ -166,12 +201,17 @@ export class MatchInstance {
   }
 
   handleReconnect(conn: ClientConnection, sessionId: string, token: string): void {
+    this.metrics.reconnectAttempts += 1
     const session = this.sessions.get(sessionId)
     if (!session || session.reconnectToken !== token) {
       this.reject(conn, RejectReason.AuthFailed, 'Invalid reconnect token')
       return
     }
-    if (Date.now() > session.graceUntil && session.graceUntil !== 0 && !session.connection) {
+    // Token must not claim another live player slot incorrectly
+    if (session.graceUntil === 0 && session.connection?.isOpen && session.connection !== conn) {
+      // Allow replace of open socket (same session), reject otherwise handled below
+    }
+    if (session.graceUntil !== 0 && Date.now() > session.graceUntil && !session.connection) {
       this.reject(conn, RejectReason.AuthFailed, 'Reconnect grace expired')
       return
     }
@@ -180,11 +220,13 @@ export class MatchInstance {
     }
     session.connection = conn
     session.graceUntil = 0
+    session.pendingInputs = []
     conn.sessionId = sessionId
     conn.playerId = session.playerId
     conn.rateLimiter = new RateLimiter(MAX_MESSAGES_PER_SECOND, MAX_INPUTS_PER_SECOND)
     const player = this.world.players.get(session.playerId)
     if (player) player.connected = true
+    this.metrics.reconnectSuccesses += 1
 
     conn.send(
       encodeMessage(MessageType.Welcome, {
@@ -204,39 +246,92 @@ export class MatchInstance {
     if (!session) return
 
     if (!conn.rateLimiter?.allowInput()) {
+      this.metrics.rateLimitViolations += 1
       this.securityLog.rateLimit(conn.playerId, 'input')
       return
     }
 
-    // Duplicate / out-of-order: ignore older or equal seq
+    // Duplicate / out-of-order relative to last accepted seq: ignore
     if (input.seq <= session.lastSeq) {
       return
     }
+    // Also ignore if already queued with same or older seq
+    if (session.pendingInputs.some((p) => p.seq >= input.seq)) {
+      return
+    }
+
     // Stale / future tick bounds
     const tickDelta = input.clientTick - this.world.tick
     if (tickDelta < -120 || tickDelta > 6) {
+      this.metrics.movementViolations += 1
       this.securityLog.movementViolation(conn.playerId, 'tick_skew')
       return
     }
 
-    session.lastSeq = input.seq
-    conn.lastAckSeq = input.seq
+    if (
+      !Number.isFinite(input.moveX) ||
+      !Number.isFinite(input.moveY) ||
+      !Number.isFinite(input.yaw) ||
+      !Number.isFinite(input.pitch) ||
+      !Number.isFinite(input.seq) ||
+      !Number.isFinite(input.clientTick) ||
+      input.seq < 0 ||
+      input.clientTick < 0
+    ) {
+      this.metrics.movementViolations += 1
+      this.securityLog.movementViolation(conn.playerId, 'non_finite')
+      return
+    }
 
-    const moveX = Math.max(-1, Math.min(1, Math.round(input.moveX)))
-    const moveY = Math.max(-1, Math.min(1, Math.round(input.moveY)))
+    const moveX = Math.max(-1, Math.min(1, Number.isFinite(input.moveX) ? input.moveX : 0))
+    const moveY = Math.max(-1, Math.min(1, Number.isFinite(input.moveY) ? input.moveY : 0))
+    // Normalize diagonal axes so length never exceeds 1
+    const axisLen = Math.hypot(moveX, moveY)
+    const normX = axisLen > 1 ? moveX / axisLen : moveX
+    const normY = axisLen > 1 ? moveY / axisLen : moveY
 
-    this.world.applyInput({
-      playerId: conn.playerId,
-      seq: input.seq,
-      moveX,
-      moveY,
-      jump: input.jump,
-      dash: input.dash,
-      shoot: input.shoot,
-      reload: input.reload,
+    const queued: InputCommandPayload = {
+      ...input,
+      moveX: normX,
+      moveY: normY,
       yaw: input.yaw,
-      pitch: input.pitch,
-    })
+      pitch: Math.max(-Math.PI / 2, Math.min(Math.PI / 2, input.pitch)),
+    }
+
+    if (session.pendingInputs.length >= MAX_PENDING_INPUTS) {
+      session.pendingInputs.shift()
+      session.droppedInputs += 1
+      this.metrics.movementViolations += 1
+    }
+    session.pendingInputs.push(queued)
+    if (session.pendingInputs.length > this.metrics.peakPendingInputs) {
+      this.metrics.peakPendingInputs = session.pendingInputs.length
+    }
+  }
+
+  private drainPendingInputs(): void {
+    for (const session of this.sessions.values()) {
+      let applied = 0
+      while (session.pendingInputs.length > 0 && applied < MAX_INPUTS_PER_TICK) {
+        const input = session.pendingInputs.shift()!
+        if (input.seq <= session.lastSeq) continue
+        session.lastSeq = input.seq
+        if (session.connection) session.connection.lastAckSeq = input.seq
+        this.world.applyInput({
+          playerId: session.playerId,
+          seq: input.seq,
+          moveX: input.moveX,
+          moveY: input.moveY,
+          jump: input.jump,
+          dash: input.dash,
+          shoot: input.shoot,
+          reload: input.reload,
+          yaw: input.yaw,
+          pitch: input.pitch,
+        })
+        applied += 1
+      }
+    }
   }
 
   handleDisconnect(conn: ClientConnection): void {
@@ -282,6 +377,7 @@ export class MatchInstance {
     if (!decoded.ok) {
       this.securityLog.invalidMessage(conn.remoteAddress, decoded.error.code)
       this.metrics.errors += 1
+      this.metrics.invalidMessages += 1
       if (decoded.error.code === 'version_mismatch') {
         this.reject(conn, RejectReason.VersionMismatch, decoded.error.message)
       }
@@ -289,6 +385,8 @@ export class MatchInstance {
     }
 
     conn.lastMessageAt = Date.now()
+    const typeKey = String(decoded.type)
+    this.metrics.messagesByType[typeKey] = (this.metrics.messagesByType[typeKey] ?? 0) + 1
 
     switch (decoded.type) {
       case MessageType.Hello:
@@ -314,20 +412,40 @@ export class MatchInstance {
         conn.close(1000, 'client disconnect')
         break
       case MessageType.JoinMatch:
+        // Reserved for multi-match directory; single-match server ignores.
         break
       default:
         this.securityLog.invalidMessage(conn.remoteAddress, `unexpected_${decoded.type}`)
+        this.metrics.invalidMessages += 1
         break
     }
   }
 
   private tick(): void {
-    const t0 = performance.now()
-    this.world.step()
-    this.flushWorldEvents()
+    const wallNow = Date.now()
+    const intervalMs = 1000 / this.config.tickRate
+    const behind = this.lastTickWallMs > 0 ? wallNow - this.lastTickWallMs : intervalMs
+    // Catch up a few steps if the event loop lagged (bounded to avoid spirals)
+    const steps = Math.min(4, Math.max(1, Math.round(behind / intervalMs)))
+    this.lastTickWallMs = wallNow
 
-    if (this.world.shouldEmitSnapshot()) {
-      this.broadcastSnapshot()
+    for (let step = 0; step < steps; step++) {
+      const t0 = performance.now()
+      this.drainPendingInputs()
+      this.world.step()
+      this.flushWorldEvents()
+
+      if (this.world.shouldEmitSnapshot()) {
+        this.broadcastSnapshot()
+      }
+
+      const dt = performance.now() - t0
+      this.metrics.tickCount += 1
+      this.metrics.tickDurations.push(dt)
+      if (dt > TICK_BUDGET_MS) this.metrics.tickOverruns += 1
+      if (this.metrics.tickDurations.length > 600) {
+        this.metrics.tickDurations.shift()
+      }
     }
 
     // Heartbeat / timeout
@@ -341,12 +459,11 @@ export class MatchInstance {
       }
     }
 
-    const dt = performance.now() - t0
-    this.metrics.tickCount += 1
-    this.metrics.tickDurations.push(dt)
-    if (this.metrics.tickDurations.length > 600) {
-      this.metrics.tickDurations.shift()
-    }
+    const heap = process.memoryUsage().heapUsed
+    if (heap > this.memPeakBytes) this.memPeakBytes = heap
+
+    const players = this.activePlayerCount()
+    if (players > this.metrics.peakPlayers) this.metrics.peakPlayers = players
 
     if (
       this.world.phase === MatchPhase.Results &&
@@ -399,6 +516,7 @@ export class MatchInstance {
           )
           break
         case 'death':
+          this.metrics.playerDeaths += 1
           this.broadcast(
             encodeMessage(MessageType.DeathEvent, {
               victimId: ev.data.victimId as number,
@@ -419,6 +537,7 @@ export class MatchInstance {
           )
           break
         case 'match_ended': {
+          this.metrics.matchCompletions += 1
           const standings = (ev.data.standings as ReturnType<typeof sortLeaderboard>).map(
             (s, i) => ({
               playerId: s.id,
@@ -499,6 +618,10 @@ export class MatchInstance {
       this.metrics.bytesOut += buf.byteLength
       this.metrics.snapshotBytes += buf.byteLength
       this.metrics.snapshotCount += 1
+      this.metrics.snapshotSizes.push(buf.byteLength)
+      if (this.metrics.snapshotSizes.length > 600) {
+        this.metrics.snapshotSizes.shift()
+      }
 
       // Local correction for owning player
       const me = this.world.players.get(session.playerId)
@@ -538,6 +661,7 @@ export class MatchInstance {
       this.activePlayerCount() >= MIN_PLAYERS_TO_START
     ) {
       this.world.startCountdown(PRE_MATCH_COUNTDOWN_SECONDS)
+      this.metrics.matchStarts += 1
       this.broadcastMatchState()
     }
   }
@@ -580,26 +704,73 @@ export class MatchInstance {
     }
   }
 
-  getMetrics(): Record<string, number | string> {
+  getPublicStatus(): Record<string, unknown> {
+    const joinAvailable =
+      this.simulationReady &&
+      this.activePlayerCount() < this.config.maxPlayers &&
+      this.world.phase !== MatchPhase.Ending
+    return {
+      serverName: this.config.serverName,
+      region: this.config.region,
+      protocolVersion: PROTOCOL_VERSION,
+      mapId: this.world.map.id,
+      mapName: this.world.map.name,
+      matchState: MatchPhase[this.world.phase] ?? String(this.world.phase),
+      players: this.activePlayerCount(),
+      maxPlayers: this.config.maxPlayers,
+      timeRemaining: Math.max(0, Math.round(this.world.timeRemaining)),
+      scoreLimit: this.world.scoreLimit,
+      joinAvailable,
+      wsPath: this.config.wsPath,
+      publicUrl: this.config.publicUrl,
+    }
+  }
+
+  getMetrics(): Record<string, number | string | Record<string, number>> {
     const durs = [...this.metrics.tickDurations].sort((a, b) => a - b)
-    const p = (q: number) =>
-      durs.length === 0 ? 0 : durs[Math.min(durs.length - 1, Math.floor(q * (durs.length - 1)))]
+    const snaps = [...this.metrics.snapshotSizes].sort((a, b) => a - b)
+    const p = (arr: number[], q: number) =>
+      arr.length === 0 ? 0 : arr[Math.min(arr.length - 1, Math.floor(q * (arr.length - 1)))]!
     const avgSnap =
       this.metrics.snapshotCount === 0
         ? 0
         : this.metrics.snapshotBytes / this.metrics.snapshotCount
+    const mem = process.memoryUsage()
     return {
       tickCount: this.metrics.tickCount,
-      tickP50: p(0.5),
-      tickP95: p(0.95),
-      tickMax: durs.length ? durs[durs.length - 1] : 0,
+      tickP50: p(durs, 0.5),
+      tickP95: p(durs, 0.95),
+      tickP99: p(durs, 0.99),
+      tickMax: durs.length ? durs[durs.length - 1]! : 0,
+      tickOverruns: this.metrics.tickOverruns,
       players: this.activePlayerCount(),
+      peakPlayers: this.metrics.peakPlayers,
+      activeMatches: 1,
+      activeProjectiles: this.world.projectiles.size,
       avgSnapshotBytes: avgSnap,
+      snapshotSizeP50: p(snaps, 0.5),
+      snapshotSizeP95: p(snaps, 0.95),
+      snapshotSizeMax: snaps.length ? snaps[snaps.length - 1]! : 0,
       bytesIn: this.metrics.bytesIn,
       bytesOut: this.metrics.bytesOut,
       phase: MatchPhase[this.world.phase] ?? String(this.world.phase),
+      timeRemaining: this.world.timeRemaining,
       rejects: this.metrics.rejects,
       errors: this.metrics.errors,
+      invalidMessages: this.metrics.invalidMessages,
+      rateLimitViolations: this.metrics.rateLimitViolations,
+      movementViolations: this.metrics.movementViolations,
+      weaponViolations: this.metrics.weaponViolations,
+      reconnectAttempts: this.metrics.reconnectAttempts,
+      reconnectSuccesses: this.metrics.reconnectSuccesses,
+      matchStarts: this.metrics.matchStarts,
+      matchCompletions: this.metrics.matchCompletions,
+      playerDeaths: this.metrics.playerDeaths,
+      peakPendingInputs: this.metrics.peakPendingInputs,
+      heapUsed: mem.heapUsed,
+      heapUsedStart: this.memStartBytes,
+      heapUsedPeak: this.memPeakBytes,
+      messagesByType: this.metrics.messagesByType,
     }
   }
 }

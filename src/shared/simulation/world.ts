@@ -65,6 +65,7 @@ export class GameWorld {
   tick = 0
   phase: MatchPhase = MatchPhase.Waiting
   timeRemaining = MATCH_DURATION_SECONDS
+  matchDurationSeconds = MATCH_DURATION_SECONDS
   scoreLimit = SCORE_LIMIT
   countdownRemaining = 0
   nextPlayerId = 1
@@ -72,6 +73,7 @@ export class GameWorld {
   private recentDeaths: Array<{ position: Vec3; age: number }> = []
   private recentSpawns: Array<{ spawnId: string; age: number }> = []
   private impactedProjectiles = new Set<number>()
+  private recentDamage: Array<{ position: Vec3; age: number }> = []
 
   constructor(map: MapDefinition = ARENA_MAP) {
     this.map = map
@@ -113,11 +115,17 @@ export class GameWorld {
       position: p.sim.position,
       alive: p.sim.alive,
     }))
+    const rockets = [...this.projectiles.values()].map((p) => ({
+      position: p.position,
+      alive: p.alive,
+    }))
     return pickBestSpawn(
       this.spawnCandidates,
       enemies,
       this.recentDeaths,
       this.recentSpawns,
+      rockets,
+      this.recentDamage,
     )
   }
 
@@ -197,7 +205,7 @@ export class GameWorld {
       this.countdownRemaining -= TICK_DT
       if (this.countdownRemaining <= 0) {
         this.phase = MatchPhase.Active
-        this.timeRemaining = MATCH_DURATION_SECONDS
+        this.timeRemaining = this.matchDurationSeconds
       }
     } else if (this.phase === MatchPhase.Active) {
       this.timeRemaining -= TICK_DT
@@ -308,6 +316,7 @@ export class GameWorld {
       const victim = this.players.get(hit.playerId)
       if (!victim) continue
       const result = applyDamage(victim, hit.damage, impact.ownerId)
+      this.recentDamage.push({ position: cloneVec3(victim.sim.position), age: 0 })
       this.events.push({
         type: 'damage',
         data: {
@@ -362,7 +371,7 @@ export class GameWorld {
 
   startMatch(): void {
     this.phase = MatchPhase.Active
-    this.timeRemaining = MATCH_DURATION_SECONDS
+    this.timeRemaining = this.matchDurationSeconds
   }
 
   endMatch(reason: string): void {
@@ -382,8 +391,9 @@ export class GameWorld {
     this.impactedProjectiles.clear()
     this.recentDeaths = []
     this.recentSpawns = []
+    this.recentDamage = []
     this.tick = 0
-    this.timeRemaining = MATCH_DURATION_SECONDS
+    this.timeRemaining = this.matchDurationSeconds
     this.phase = MatchPhase.Countdown
     this.countdownRemaining = 5
     for (const p of this.players.values()) {
@@ -409,8 +419,10 @@ export class GameWorld {
   private ageLists(dt: number): void {
     for (const d of this.recentDeaths) d.age += dt
     for (const s of this.recentSpawns) s.age += dt
+    for (const d of this.recentDamage) d.age += dt
     this.recentDeaths = this.recentDeaths.filter((d) => d.age < 10)
     this.recentSpawns = this.recentSpawns.filter((s) => s.age < 12)
+    this.recentDamage = this.recentDamage.filter((d) => d.age < 6)
   }
 }
 

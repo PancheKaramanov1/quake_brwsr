@@ -26,6 +26,14 @@ export interface PendingInput {
   pitch: number
 }
 
+export interface PredictionDiagnostics {
+  correctionCount: number
+  correctionDistances: number[]
+  hardSnapCount: number
+  inputReplayCount: number
+  softBlendCount: number
+}
+
 function cloneSimState(src: PlayerSimState): PlayerSimState {
   return {
     position: cloneVec3(src.position),
@@ -62,12 +70,24 @@ function copySimState(dst: PlayerSimState, src: PlayerSimState): void {
   dst.alive = src.alive
 }
 
+function percentile(sorted: number[], q: number): number {
+  if (sorted.length === 0) return 0
+  return sorted[Math.min(sorted.length - 1, Math.floor(q * (sorted.length - 1)))]!
+}
+
 export class ClientPrediction {
   private pending: PendingInput[] = []
   private predicted: PlayerSimState
   private colliders: readonly AABB[]
   private floorY: number
   private awaitingSnapshot = false
+  readonly diagnostics: PredictionDiagnostics = {
+    correctionCount: 0,
+    correctionDistances: [],
+    hardSnapCount: 0,
+    inputReplayCount: 0,
+    softBlendCount: 0,
+  }
 
   constructor(initial: PlayerSimState, colliders: readonly AABB[], floorY: number) {
     this.predicted = cloneSimState(initial)
@@ -113,6 +133,9 @@ export class ClientPrediction {
       return this.predicted
     }
     this.pending.push({ ...input })
+    while (this.pending.length > 128) {
+      this.pending.shift()
+    }
     const move = inputFromAxes(
       input.moveX,
       input.moveY,
@@ -144,10 +167,18 @@ export class ClientPrediction {
         input.pitch,
       )
       stepPlayerMovement(corrected, move, this.colliders, this.floorY, TICK_DT)
+      this.diagnostics.inputReplayCount += 1
     }
 
     const error = distanceVec3(this.predicted.position, corrected.position)
+    this.diagnostics.correctionCount += 1
+    this.diagnostics.correctionDistances.push(error)
+    if (this.diagnostics.correctionDistances.length > 600) {
+      this.diagnostics.correctionDistances.shift()
+    }
+
     if (error < CORRECTION_SNAP_THRESHOLD) {
+      this.diagnostics.softBlendCount += 1
       const t = CORRECTION_SMOOTH_FACTOR
       this.predicted.position.x += (corrected.position.x - this.predicted.position.x) * t
       this.predicted.position.y += (corrected.position.y - this.predicted.position.y) * t
@@ -167,10 +198,30 @@ export class ClientPrediction {
       this.predicted.jumpCooldown = corrected.jumpCooldown
       this.predicted.alive = corrected.alive
     } else {
+      this.diagnostics.hardSnapCount += 1
       copySimState(this.predicted, corrected)
     }
 
     return this.predicted
+  }
+
+  getDiagnosticSummary(): {
+    correctionCount: number
+    correctionP50: number
+    correctionP95: number
+    correctionMax: number
+    hardSnapCount: number
+    inputReplayCount: number
+  } {
+    const sorted = [...this.diagnostics.correctionDistances].sort((a, b) => a - b)
+    return {
+      correctionCount: this.diagnostics.correctionCount,
+      correctionP50: percentile(sorted, 0.5),
+      correctionP95: percentile(sorted, 0.95),
+      correctionMax: sorted.length ? sorted[sorted.length - 1]! : 0,
+      hardSnapCount: this.diagnostics.hardSnapCount,
+      inputReplayCount: this.diagnostics.inputReplayCount,
+    }
   }
 }
 

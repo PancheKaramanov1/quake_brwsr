@@ -211,9 +211,9 @@ function buildSpawns(): SpawnPointDef[] {
     { id: 'spawn_court_se', x: 62, y: 0.9, z: -62, zone: 'courtyard' },
     { id: 'spawn_court_sw', x: -62, y: 0.9, z: -62, zone: 'courtyard' },
     // Wings
-    { id: 'spawn_east_g', x: 58, y: 0.9, z: 10, zone: 'east_wing' },
+    { id: 'spawn_east_g', x: 48, y: 0.9, z: 22, zone: 'east_wing' },
     { id: 'spawn_east_u', x: 52, y: 7.1, z: -8, zone: 'east_wing' },
-    { id: 'spawn_west_g', x: -58, y: 0.9, z: -10, zone: 'west_wing' },
+    { id: 'spawn_west_g', x: -48, y: 0.9, z: -22, zone: 'west_wing' },
     { id: 'spawn_west_u', x: -52, y: 7.1, z: 8, zone: 'west_wing' },
     // Atrium mid / high
     { id: 'spawn_atr_mid_n', x: 0, y: 6.6, z: 14, zone: 'atrium' },
@@ -223,13 +223,13 @@ function buildSpawns(): SpawnPointDef[] {
     { id: 'spawn_roof_e', x: 55, y: 12.1, z: 4, zone: 'rooftop' },
     { id: 'spawn_roof_w', x: -55, y: 12.1, z: -4, zone: 'rooftop' },
     { id: 'spawn_roof_n', x: 4, y: 12.1, z: 45, zone: 'rooftop' },
-    // Tunnels / service / connectors
-    { id: 'spawn_tunnel_e', x: 26, y: 0.9, z: 0, zone: 'tunnels' },
-    { id: 'spawn_tunnel_w', x: -26, y: 0.9, z: 0, zone: 'tunnels' },
-    { id: 'spawn_svc_se', x: 40, y: 0.9, z: -40, zone: 'service' },
+    // Tunnels / service / connectors — offset from solid volumes
+    { id: 'spawn_tunnel_e', x: 22, y: 0.9, z: 6, zone: 'tunnels' },
+    { id: 'spawn_tunnel_w', x: -22, y: 0.9, z: -6, zone: 'tunnels' },
+    { id: 'spawn_svc_se', x: 36, y: 0.9, z: -50, zone: 'service' },
     { id: 'spawn_svc_nw', x: -40, y: 6.1, z: 40, zone: 'service' },
     { id: 'spawn_conn_e', x: 32, y: 6.6, z: 0, zone: 'connectors' },
-    { id: 'spawn_conn_s', x: 0, y: 0.9, z: -32, zone: 'connectors' },
+    { id: 'spawn_conn_s', x: 8, y: 0.9, z: -36, zone: 'connectors' },
   ]
 
   return defs.map((s) => ({

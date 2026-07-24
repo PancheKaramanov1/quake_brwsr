@@ -12,6 +12,7 @@ export class GameServer {
   readonly match: MatchInstance
   private startedAt = 0
   private accepting = true
+  private networkReady = false
 
   constructor(private readonly config: ServerConfig) {
     this.match = new MatchInstance(config, this.securityLog)
@@ -52,6 +53,7 @@ export class GameServer {
 
     this.startedAt = Date.now()
     this.match.start()
+    this.networkReady = true
     console.log(
       `[server] listening on http://${this.config.host}:${this.config.port} ws path ${this.config.wsPath}`,
     )
@@ -65,7 +67,14 @@ export class GameServer {
   }
 
   private onConnection(socket: WebSocket, req: http.IncomingMessage): void {
-    const addr = req.socket.remoteAddress ?? 'unknown'
+    let addr = req.socket.remoteAddress ?? 'unknown'
+    if (this.config.trustProxy) {
+      const fwd = req.headers['x-forwarded-for']
+      if (typeof fwd === 'string' && fwd.length > 0) {
+        // Logging only — never used for auth decisions
+        addr = fwd.split(',')[0]?.trim() || addr
+      }
+    }
     const conn = new ClientConnection(socket, addr)
 
     socket.on('message', (raw) => {
@@ -92,30 +101,76 @@ export class GameServer {
     })
   }
 
+  isReady(): boolean {
+    return (
+      this.accepting &&
+      this.networkReady &&
+      this.match.isSimulationReady &&
+      this.httpServer !== null &&
+      this.wss !== null
+    )
+  }
+
   private handleHttp(req: http.IncomingMessage, res: http.ServerResponse): void {
-    const url = req.url ?? '/'
+    const url = (req.url ?? '/').split('?')[0] ?? '/'
+    const cors = {
+      'Access-Control-Allow-Origin': this.config.isProduction
+        ? this.config.allowedOrigins[0] ?? ''
+        : '*',
+      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    }
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, cors)
+      res.end()
+      return
+    }
+
     if (url === '/health' || url === '/healthz') {
-      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.writeHead(200, { 'Content-Type': 'application/json', ...cors })
       res.end(JSON.stringify({ status: 'ok', uptimeMs: Date.now() - this.startedAt }))
       return
     }
     if (url === '/ready' || url === '/readyz') {
-      const ready = this.accepting && this.match !== null
-      res.writeHead(ready ? 200 : 503, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ ready }))
+      const ready = this.isReady()
+      res.writeHead(ready ? 200 : 503, { 'Content-Type': 'application/json', ...cors })
+      res.end(
+        JSON.stringify({
+          ready,
+          accepting: this.accepting,
+          networkReady: this.networkReady,
+          simulationReady: this.match.isSimulationReady,
+        }),
+      )
+      return
+    }
+    if (url === '/status' || url === '/api/servers' || url === '/api/servers/') {
+      res.writeHead(200, { 'Content-Type': 'application/json', ...cors })
+      const status = this.match.getPublicStatus()
+      // Directory-shaped response for future multi-server replacement
+      res.end(
+        JSON.stringify({
+          ...status,
+          servers: [status],
+        }),
+      )
       return
     }
     if (url === '/metrics') {
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify(this.match.getMetrics()))
+      res.writeHead(200, { 'Content-Type': 'application/json', ...cors })
+      const metrics = this.match.getMetrics()
+      // Never expose reconnect tokens, IPs, or display names here
+      res.end(JSON.stringify(metrics))
       return
     }
-    res.writeHead(404, { 'Content-Type': 'text/plain' })
+    res.writeHead(404, { 'Content-Type': 'text/plain', ...cors })
     res.end('Not found')
   }
 
   async shutdown(): Promise<void> {
     this.accepting = false
+    this.networkReady = false
     this.match.notifyShutdown()
     this.match.stop()
     await new Promise<void>((resolve) => {

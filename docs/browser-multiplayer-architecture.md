@@ -97,11 +97,22 @@ Offline single-player remains available via the main menu (`Game` + AI enemies).
 | `ClientConnection.ts` | Per-socket send/close + rate limiter |
 | `RateLimiter` / `SecurityLogger` | Abuse controls and structured security logs |
 
-One process hosts **one in-memory FFA match** (no separate matchmaking service).
+One process hosts **one in-memory FFA match**.
+
+## Session discovery (current vs future)
+
+| Layer | Status |
+| ----- | ------ |
+| `GET /status` (+ `/api/servers`) | **Implemented** — public match info for the single process |
+| Client server browser / Join | **Implemented** — refresh + join; manual URL under Advanced |
+| Global matchmaking / room codes | **Deferred** — not required for single-server deploy |
+| Accounts / ranked tickets | **Deferred** |
+
+Directory-shaped JSON (`servers: [status]`) allows a future multi-server directory to replace the single entry without rewriting gameplay networking.
 
 ## Match lifecycle
 
-Phases: `Waiting` → `Countdown` → `Active` → `Ending` → `Results` → `Restarting`.
+Phases: `Waiting` → `Countdown` → `Active` → `Ending` → `Results` → restart countdown.
 
 Defaults (overridable via env / config): match duration **600 s**, score limit **25**, respawn delay **3 s**, spawn protection **2 s**, min players to start **1**.
 
@@ -113,3 +124,5 @@ Defaults (overridable via env / config): match duration **600 s**, score limit *
 - [Testing](./browser-multiplayer-testing.md)
 - [Security](./browser-multiplayer-security.md)
 - [Map design](./multiplayer-map-design.md)
+- [Weapon matrix](./multiplayer-weapon-matrix.md)
+- [Hardening report](./browser-multiplayer-hardening-report.md)

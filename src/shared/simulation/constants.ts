@@ -17,6 +17,12 @@ export const MAX_PLAYERS = 12
 export const MAX_MESSAGE_BYTES = 64 * 1024
 export const MAX_MESSAGES_PER_SECOND = 120
 export const MAX_INPUTS_PER_SECOND = 90
+/** Max inputs retained per connection between ticks (bounded queue). */
+export const MAX_PENDING_INPUTS = 32
+/** Max inputs applied from one connection in a single server tick. */
+export const MAX_INPUTS_PER_TICK = 2
+/** Soft tick budget (ms); overruns are counted in metrics. */
+export const TICK_BUDGET_MS = 1000 / TICK_RATE
 
 export const MATCH_DURATION_SECONDS = 600
 export const SCORE_LIMIT = 25
@@ -66,3 +72,5 @@ export const DISPLAY_NAME_PATTERN = /^[a-zA-Z0-9_\- ]+$/
 export const DEFAULT_SERVER_HOST = '0.0.0.0'
 export const DEFAULT_SERVER_PORT = 8080
 export const DEFAULT_WS_PATH = '/ws'
+export const DEFAULT_SERVER_NAME = 'Reactor Atrium FFA'
+export const DEFAULT_SERVER_REGION = 'local'

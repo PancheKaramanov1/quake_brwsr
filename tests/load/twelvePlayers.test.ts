@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { writeFileSync, mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { GameServer } from '../../server/GameServer.js'
-import { PROTOCOL_VERSION } from '../../src/shared/simulation/constants.js'
+import { MessageType, RejectReason } from '../../src/shared/protocol/messages.js'
 import { encodeMessage } from '../../src/shared/protocol/codec.js'
-import { MessageType } from '../../src/shared/protocol/messages.js'
+import { PROTOCOL_VERSION } from '../../src/shared/simulation/constants.js'
+import { CombatBot, percentile, sleep } from '../helpers/botClient.js'
 import {
   connectWs,
   createTestServerConfig,
@@ -10,21 +13,20 @@ import {
   getFreePort,
   waitForMessageType,
   wsUrl,
-  type WsClient,
 } from '../helpers/wsTestUtils.js'
 
 const PLAYER_COUNT = 12
-const RUN_MS = 3000
-const INPUT_INTERVAL_MS = 50
+/** Standard load: ≥ 2 minutes of active combat. */
+const RUN_MS = Number(process.env.LOAD_RUN_MS ?? 120_000)
 
-describe('twelve-player load', () => {
+describe('twelve-player load (2 minutes)', () => {
   let server: GameServer | null = null
-  const clients: WsClient[] = []
+  const bots: CombatBot[] = []
 
   afterEach(async () => {
-    while (clients.length > 0) {
-      const c = clients.pop()
-      if (c) await c.close()
+    while (bots.length > 0) {
+      const b = bots.pop()
+      if (b) await b.disconnect(true)
     }
     if (server) {
       await server.shutdown()
@@ -32,94 +34,100 @@ describe('twelve-player load', () => {
     }
   })
 
-  it('welcomes 12 clients sending inputs for ~3s without crashing', async () => {
-    const port = await getFreePort()
-    const config = createTestServerConfig({
-      port,
-      maxPlayers: PLAYER_COUNT,
-      reconnectGraceMs: 100,
-    })
-    server = new GameServer(config)
-    await server.start()
+  it(
+    'runs 12 combat bots for 2 minutes without unexpected disconnects',
+    async () => {
+      const port = await getFreePort()
+      const config = createTestServerConfig({
+        port,
+        maxPlayers: PLAYER_COUNT,
+        matchDurationSeconds: 600,
+        scoreLimit: 100,
+        reconnectGraceMs: 2000,
+      })
+      server = new GameServer(config)
+      await server.start()
+      const url = wsUrl(port)
 
-    const url = wsUrl(port)
-    const welcomed: boolean[] = []
+      const memStart = (await fetchMetrics(port)).heapUsed as number
 
-    for (let i = 0; i < PLAYER_COUNT; i++) {
-      const client = await connectWs(url, 5000)
-      clients.push(client)
-      client.socket.send(
+      for (let i = 0; i < PLAYER_COUNT; i++) {
+        const bot = new CombatBot(`Load${i + 1}`)
+        await bot.connect(url)
+        bots.push(bot)
+      }
+      expect(bots).toHaveLength(PLAYER_COUNT)
+      expect(bots.every((b) => b.stats.welcomed)).toBe(true)
+
+      // 13th rejected
+      const extra = await connectWs(url, 5000)
+      extra.socket.send(
         encodeMessage(MessageType.Hello, {
           protocolVersion: PROTOCOL_VERSION,
-          displayName: `P${i + 1}`,
+          displayName: 'Overflow',
         }),
       )
-      const welcome = await waitForMessageType(client.socket, MessageType.Welcome, 5000)
-      expect(welcome.type).toBe(MessageType.Welcome)
-      welcomed.push(true)
-    }
+      const reject = await waitForMessageType(extra.socket, MessageType.Reject, 5000)
+      expect(reject.type).toBe(MessageType.Reject)
+      if (reject.type === MessageType.Reject) {
+        expect(reject.payload.reason).toBe(RejectReason.Full)
+      }
+      await extra.close()
 
-    expect(welcomed).toHaveLength(PLAYER_COUNT)
-    expect(welcomed.every(Boolean)).toBe(true)
+      for (const bot of bots) bot.startCombatLoop(50)
+      await sleep(RUN_MS)
+      for (const bot of bots) bot.stop()
 
-    // Sync clientTick to server tick so inputs are not rejected for skew.
-    const syncSnap = await waitForMessageType(clients[0].socket, MessageType.Snapshot, 5000)
-    expect(syncSnap.type).toBe(MessageType.Snapshot)
-    const baseTick = syncSnap.type === MessageType.Snapshot ? syncSnap.payload.tick : 0
+      const metrics = await fetchMetrics(port)
+      const memEnd = metrics.heapUsed as number
+      const memPeak = metrics.heapUsedPeak as number
 
-    const start = Date.now()
-    const timers: ReturnType<typeof setInterval>[] = []
+      const stillConnected = bots.filter((b) => b.client?.socket.readyState === 1).length
+      expect(stillConnected).toBe(PLAYER_COUNT)
+      expect(bots.some((b) => b.stats.nonFiniteSeen)).toBe(false)
+      expect(bots.some((b) => b.stats.protocolErrors > 0)).toBe(false)
 
-    for (let i = 0; i < clients.length; i++) {
-      const client = clients[i]
-      let seq = 1
-      const timer = setInterval(() => {
-        if (client.socket.readyState !== 1) return
-        const elapsedTicks = Math.floor(((Date.now() - start) / 1000) * 60)
-        client.socket.send(
-          encodeMessage(MessageType.InputCommand, {
-            seq: seq++,
-            clientTick: baseTick + elapsedTicks,
-            moveX: i % 2 === 0 ? 1 : -1,
-            moveY: 1,
-            jump: false,
-            crouch: false,
-            dash: false,
-            shoot: false,
-            reload: false,
-            yaw: (i / PLAYER_COUNT) * Math.PI * 2,
-            pitch: 0,
-          }),
+      const snapSizes = bots.flatMap((b) => b.stats.snapshotSizes)
+      const report = {
+        attempted: PLAYER_COUNT + 1,
+        successful: PLAYER_COUNT,
+        rejected: 1,
+        unexpectedDisconnects: PLAYER_COUNT - stillConnected,
+        tickP50: metrics.tickP50,
+        tickP95: metrics.tickP95,
+        tickP99: metrics.tickP99,
+        tickMax: metrics.tickMax,
+        tickOverruns: metrics.tickOverruns,
+        snapshotSizeP50: percentile(snapSizes, 0.5),
+        snapshotSizeP95: percentile(snapSizes, 0.95),
+        snapshotSizeMax: percentile(snapSizes, 1),
+        bytesOut: metrics.bytesOut,
+        bytesIn: metrics.bytesIn,
+        bandwidthPerClientBps:
+          (Number(metrics.bytesOut) / (RUN_MS / 1000)) / PLAYER_COUNT,
+        memStart,
+        memEnd,
+        memPeak,
+        peakPendingInputs: metrics.peakPendingInputs,
+        durationMs: RUN_MS,
+      }
+
+      try {
+        mkdirSync(join(process.cwd(), 'artifacts'), { recursive: true })
+        writeFileSync(
+          join(process.cwd(), 'artifacts', 'load-report.json'),
+          JSON.stringify(report, null, 2),
         )
-      }, INPUT_INTERVAL_MS)
-      timers.push(timer)
-    }
+      } catch {
+        // ignore artifact write failures
+      }
 
-    await new Promise<void>((resolve) => setTimeout(resolve, RUN_MS))
-    for (const t of timers) clearInterval(t)
+      // Memory should not explode unboundedly over 2 minutes
+      expect(Number(memPeak)).toBeLessThan(Number(memStart) + 400 * 1024 * 1024)
+      expect(Number(metrics.tickP95)).toBeLessThan(50)
 
-    const metrics = await fetchMetrics(port)
-    expect(metrics.players).toBe(PLAYER_COUNT)
-    expect(Number(metrics.tickCount)).toBeGreaterThan(0)
-
-    console.log('[load] tick metrics', {
-      tickCount: metrics.tickCount,
-      tickP50: metrics.tickP50,
-      tickP95: metrics.tickP95,
-      tickMax: metrics.tickMax,
-      players: metrics.players,
-      avgSnapshotBytes: metrics.avgSnapshotBytes,
-      bytesIn: metrics.bytesIn,
-      bytesOut: metrics.bytesOut,
-      phase: metrics.phase,
-    })
-
-    for (const c of clients) {
-      await c.close()
-    }
-    clients.length = 0
-
-    await server.shutdown()
-    server = null
-  }, 60_000)
+      for (const bot of bots) await bot.disconnect(true)
+    },
+    RUN_MS + 60_000,
+  )
 })

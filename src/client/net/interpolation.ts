@@ -124,6 +124,8 @@ export class SnapshotInterpolator {
   private frames: SnapshotFrame[] = []
   private readonly maxFrames: number
   readonly delayMs: number
+  underrunCount = 0
+  extrapolationCount = 0
 
   constructor(delayMs = INTERP_DELAY_MS, maxFrames = 32) {
     this.delayMs = delayMs
@@ -178,6 +180,7 @@ export class SnapshotInterpolator {
 
     // Before first frame
     if (target <= this.frames[0]!.time) {
+      this.underrunCount += 1
       for (const p of this.frames[0]!.players.values()) {
         result.set(p.id, toInterpolated(p))
       }
@@ -188,6 +191,7 @@ export class SnapshotInterpolator {
 
     // Past newest → limited extrapolation
     if (target >= newest.time) {
+      this.extrapolationCount += 1
       const dtSec = Math.min((target - newest.time) / 1000, MAX_EXTRAPOLATION_MS / 1000)
       for (const p of newest.players.values()) {
         result.set(p.id, extrapolate(p, dtSec))

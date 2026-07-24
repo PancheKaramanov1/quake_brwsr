@@ -1,5 +1,6 @@
 /** DOM overlay menu for single-player / multiplayer entry. */
 
+import { PROTOCOL_VERSION } from '../../shared/simulation/constants.js'
 import { RejectReason, type StandingEntry } from '../../shared/protocol/messages.js'
 
 export type MenuMode = 'main' | 'multiplayer' | 'results' | 'hidden'
@@ -8,6 +9,36 @@ export interface MultiplayerMenuCallbacks {
   onSinglePlayer: () => void
   onConnect: (displayName: string, serverUrl: string) => void
   onBackToMain?: () => void
+}
+
+export interface DiscoveredServer {
+  serverName: string
+  region: string
+  protocolVersion: number
+  mapName: string
+  matchState: string
+  players: number
+  maxPlayers: number
+  timeRemaining: number
+  joinAvailable: boolean
+  wsUrl: string
+  publicUrl: string
+}
+
+function defaultHttpBase(): string {
+  const envUrl = import.meta.env.VITE_GAME_SERVER_HTTP_URL
+  if (typeof envUrl === 'string' && envUrl.length > 0) return envUrl.replace(/\/$/, '')
+  const ws = defaultServerUrl()
+  try {
+    const u = new URL(ws)
+    u.protocol = u.protocol === 'wss:' ? 'https:' : 'http:'
+    u.pathname = ''
+    u.search = ''
+    u.hash = ''
+    return u.toString().replace(/\/$/, '')
+  } catch {
+    return 'http://localhost:8080'
+  }
 }
 
 function defaultServerUrl(): string {
@@ -41,6 +72,21 @@ function rejectMessage(reason: RejectReason | string | null | undefined, fallbac
   return fallback ?? 'Connection rejected.'
 }
 
+function wsUrlFromStatus(status: Record<string, unknown>): string {
+  const publicUrl = String(status.publicUrl ?? defaultHttpBase())
+  const wsPath = String(status.wsPath ?? '/ws')
+  try {
+    const u = new URL(publicUrl)
+    u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
+    u.pathname = wsPath
+    u.search = ''
+    u.hash = ''
+    return u.toString()
+  } catch {
+    return defaultServerUrl()
+  }
+}
+
 export class MultiplayerMenu {
   private readonly root: HTMLDivElement
   private readonly mainPanel: HTMLDivElement
@@ -49,7 +95,10 @@ export class MultiplayerMenu {
   private readonly statusEl: HTMLParagraphElement
   private readonly resultsBody: HTMLDivElement
   private readonly reconnectEl: HTMLParagraphElement
+  private readonly serverInfoEl: HTMLDivElement
+  private readonly advancedUrlInput: HTMLInputElement
   private mode: MenuMode = 'main'
+  private discovered: DiscoveredServer | null = null
 
   constructor(
     private readonly parent: HTMLElement,
@@ -77,6 +126,8 @@ export class MultiplayerMenu {
     this.statusEl = this.multiPanel.querySelector('#mp-status') as HTMLParagraphElement
     this.resultsBody = this.resultsPanel.querySelector('#mp-results-body') as HTMLDivElement
     this.reconnectEl = this.resultsPanel.querySelector('#mp-reconnect') as HTMLParagraphElement
+    this.serverInfoEl = this.multiPanel.querySelector('#mp-server-info') as HTMLDivElement
+    this.advancedUrlInput = this.multiPanel.querySelector('#mp-url') as HTMLInputElement
 
     this.root.append(this.mainPanel, this.multiPanel, this.resultsPanel)
     this.parent.appendChild(this.root)
@@ -148,6 +199,62 @@ export class MultiplayerMenu {
     this.mainPanel.style.display = mode === 'main' ? 'block' : 'none'
     this.multiPanel.style.display = mode === 'multiplayer' ? 'block' : 'none'
     this.resultsPanel.style.display = mode === 'results' ? 'block' : 'none'
+    if (mode === 'multiplayer') {
+      void this.refreshServerStatus()
+    }
+  }
+
+  private async refreshServerStatus(): Promise<void> {
+    this.setStatus('Refreshing server…')
+    this.serverInfoEl.textContent = 'Looking for local server…'
+    try {
+      const base = defaultHttpBase()
+      const res = await fetch(`${base}/status`, { signal: AbortSignal.timeout(4000) })
+      if (!res.ok) {
+        this.discovered = null
+        this.setStatus('Server offline or unreachable.', true)
+        this.serverInfoEl.textContent = 'No discoverable match.'
+        return
+      }
+      const data = (await res.json()) as Record<string, unknown>
+      const protocolVersion = Number(data.protocolVersion ?? 0)
+      const joinAvailable = Boolean(data.joinAvailable)
+      const players = Number(data.players ?? 0)
+      const maxPlayers = Number(data.maxPlayers ?? 12)
+      const wsUrl = wsUrlFromStatus(data)
+      this.discovered = {
+        serverName: String(data.serverName ?? 'Server'),
+        region: String(data.region ?? 'local'),
+        protocolVersion,
+        mapName: String(data.mapName ?? 'unknown'),
+        matchState: String(data.matchState ?? 'unknown'),
+        players,
+        maxPlayers,
+        timeRemaining: Number(data.timeRemaining ?? 0),
+        joinAvailable,
+        wsUrl,
+        publicUrl: String(data.publicUrl ?? base),
+      }
+      this.advancedUrlInput.value = wsUrl
+      this.serverInfoEl.innerHTML = [
+        `<strong>${escapeHtml(this.discovered.serverName)}</strong>`,
+        `${escapeHtml(this.discovered.mapName)} · ${escapeHtml(this.discovered.region)}`,
+        `${players}/${maxPlayers} · ${escapeHtml(this.discovered.matchState)}`,
+        `Protocol ${protocolVersion} (client ${PROTOCOL_VERSION})`,
+      ].join('<br>')
+
+      if (protocolVersion !== PROTOCOL_VERSION) {
+        this.setStatus('Version mismatch — cannot join this server.', true)
+      } else if (!joinAvailable || players >= maxPlayers) {
+        this.setStatus('Server is full or not accepting joins.', true)
+      } else {
+        this.setStatus('Server available — ready to join.')
+      }
+    } catch {
+      this.discovered = null
+      this.setStatus('Server offline — check that the game server is running.', true)
+      this.serverInfoEl.textContent = 'No discoverable match.'
+    }
   }
 
   private buildMainPanel(): HTMLDivElement {
@@ -182,12 +289,18 @@ export class MultiplayerMenu {
     nameInput.value = localStorage.getItem('mp_display_name') ?? 'Player'
     this.styleInput(nameInput)
 
-    const urlLabel = this.label('Server URL')
-    const urlInput = document.createElement('input')
-    urlInput.id = 'mp-url'
-    urlInput.type = 'text'
-    urlInput.value = localStorage.getItem('mp_server_url') ?? defaultServerUrl()
-    this.styleInput(urlInput)
+    const serverInfo = document.createElement('div')
+    serverInfo.id = 'mp-server-info'
+    Object.assign(serverInfo.style, {
+      marginTop: '16px',
+      padding: '12px',
+      background: 'rgba(0,0,0,0.25)',
+      border: '1px solid rgba(180,200,220,0.12)',
+      fontSize: '13px',
+      lineHeight: '1.5',
+      color: '#c5d4e0',
+    } as CSSStyleDeclaration)
+    serverInfo.textContent = 'Refreshing…'
 
     const status = document.createElement('p')
     status.id = 'mp-status'
@@ -199,21 +312,66 @@ export class MultiplayerMenu {
       color: '#9ab0c0',
     } as CSSStyleDeclaration)
 
-    const connectBtn = this.button('Connect', () => {
+    const refreshBtn = this.button('Refresh', () => {
+      void this.refreshServerStatus()
+    }, true)
+
+    const joinBtn = this.button('Join', () => {
       const name = nameInput.value.trim()
-      const url = urlInput.value.trim()
+      if (!name) {
+        this.setStatus('Enter a display name.', true)
+        return
+      }
       localStorage.setItem('mp_display_name', name)
+      const url =
+        this.discovered?.wsUrl ??
+        this.advancedUrlInput.value.trim() ??
+        defaultServerUrl()
+      if (this.discovered && this.discovered.protocolVersion !== PROTOCOL_VERSION) {
+        this.setStatus('Version mismatch — cannot join.', true)
+        return
+      }
+      if (this.discovered && !this.discovered.joinAvailable) {
+        this.setStatus('Server is full or not joining.', true)
+        return
+      }
       localStorage.setItem('mp_server_url', url)
       this.setStatus('Connecting…')
       this.callbacks.onConnect(name, url)
     })
+
+    const advancedToggle = document.createElement('details')
+    Object.assign(advancedToggle.style, { marginTop: '12px' } as CSSStyleDeclaration)
+    const summary = document.createElement('summary')
+    summary.textContent = 'Advanced (manual URL)'
+    Object.assign(summary.style, {
+      cursor: 'pointer',
+      fontSize: '12px',
+      opacity: '0.7',
+    } as CSSStyleDeclaration)
+    const urlLabel = this.label('Server URL')
+    const urlInput = document.createElement('input')
+    urlInput.id = 'mp-url'
+    urlInput.type = 'text'
+    urlInput.value = localStorage.getItem('mp_server_url') ?? defaultServerUrl()
+    this.styleInput(urlInput)
+    advancedToggle.append(summary, urlLabel, urlInput)
 
     const backBtn = this.button('Back', () => {
       this.setMode('main')
       this.callbacks.onBackToMain?.()
     }, true)
 
-    panel.append(nameLabel, nameInput, urlLabel, urlInput, status, connectBtn, backBtn)
+    panel.append(
+      nameLabel,
+      nameInput,
+      serverInfo,
+      status,
+      refreshBtn,
+      joinBtn,
+      advancedToggle,
+      backBtn,
+    )
     return panel
   }
 
