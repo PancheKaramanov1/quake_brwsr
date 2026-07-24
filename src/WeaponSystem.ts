@@ -1,18 +1,28 @@
-import { Vector3, Mesh, Scene, StandardMaterial, Color3, PhysicsImpostor, Ray, ParticleSystem, Texture } from '@babylonjs/core'
+import { Vector3, Mesh, Scene, StandardMaterial, Color3, Color4, ParticleSystem, Texture } from '@babylonjs/core'
 import { Projectile, WeaponConfig } from './types.js'
+import {
+  ROCKET_AMMO_CAPACITY,
+  ROCKET_DAMAGE,
+  ROCKET_FIRE_INTERVAL,
+  ROCKET_LIFETIME,
+  ROCKET_RELOAD_TIME,
+  ROCKET_SPEED,
+  ROCKET_SPLASH_DAMAGE,
+  ROCKET_SPLASH_RADIUS,
+} from './shared/simulation/constants.js'
 
 export class WeaponSystem {
   private projectiles: Projectile[] = []
   private lastFireTime = 0
   
   private config: WeaponConfig = {
-    damage: 100,
-    splashDamage: 50,
-    splashRadius: 5,
-    projectileSpeed: 40,
-    ammoCapacity: 8,
-    reloadTime: 2000,
-    fireRate: 500 // 500ms between shots
+    damage: ROCKET_DAMAGE,
+    splashDamage: ROCKET_SPLASH_DAMAGE,
+    splashRadius: ROCKET_SPLASH_RADIUS,
+    projectileSpeed: ROCKET_SPEED,
+    ammoCapacity: ROCKET_AMMO_CAPACITY,
+    reloadTime: ROCKET_RELOAD_TIME * 1000,
+    fireRate: ROCKET_FIRE_INTERVAL * 1000,
   }
 
   constructor(private scene: Scene) {}
@@ -20,8 +30,7 @@ export class WeaponSystem {
   public fireRocket(startPosition: Vector3, direction: Vector3): boolean {
     const currentTime = Date.now()
     
-    // Check fire rate limit (500ms for faster action)
-    const fireDelay = 500 // 500ms between shots
+    const fireDelay = this.config.fireRate
     if (currentTime - this.lastFireTime < fireDelay) {
       console.log(`Fire rate limited. Wait ${(fireDelay - (currentTime - this.lastFireTime))}ms`)
       return false
@@ -55,7 +64,7 @@ export class WeaponSystem {
       damage: this.config.damage,
       splashRadius: this.config.splashRadius,
       startTime: currentTime,
-      lifeTime: 5000 // 5 seconds
+      lifeTime: ROCKET_LIFETIME * 1000,
     }
     
     this.projectiles.push(projectile)
@@ -98,9 +107,9 @@ export class WeaponSystem {
     particleSystem.maxEmitBox = new Vector3(0.05, 0.05, 0.1)
     
     // Colors
-    particleSystem.color1 = new Color3(1, 0.5, 0)
-    particleSystem.color2 = new Color3(1, 0, 0)
-    particleSystem.colorDead = new Color3(0.3, 0.1, 0)
+    particleSystem.color1 = new Color4(1, 0.5, 0, 1)
+    particleSystem.color2 = new Color4(1, 0, 0, 1)
+    particleSystem.colorDead = new Color4(0.3, 0.1, 0, 0)
     
     // Size
     particleSystem.minSize = 0.1
@@ -196,9 +205,9 @@ export class WeaponSystem {
     explosion.maxEmitBox = new Vector3(0.5, 0.5, 0.5)
     
     // Colors
-    explosion.color1 = new Color3(1, 1, 0)
-    explosion.color2 = new Color3(1, 0.5, 0)
-    explosion.colorDead = new Color3(0.3, 0.1, 0)
+    explosion.color1 = new Color4(1, 1, 0, 1)
+    explosion.color2 = new Color4(1, 0.5, 0, 1)
+    explosion.colorDead = new Color4(0.3, 0.1, 0, 0)
     
     // Size
     explosion.minSize = 0.2

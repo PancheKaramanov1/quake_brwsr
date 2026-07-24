@@ -1,11 +1,9 @@
-import { Engine, Scene, Vector3, HavokPlugin } from '@babylonjs/core'
-import HavokPhysics from '@babylonjs/havok'
+import { Engine, Scene, Vector3, Color3 } from '@babylonjs/core'
 import { Player } from './Player.js'
 import { InputManager } from './InputManager.js'
 import { WeaponSystem } from './WeaponSystem.js'
 import { Arena } from './Arena.js'
 import { EnemyManager } from './EnemyManager.js'
-import { GameConfig } from './types.js'
 
 export class Game {
   private engine: Engine
@@ -90,7 +88,11 @@ export class Game {
     // Setup fog for atmosphere
     this.scene.fogMode = Scene.FOGMODE_EXP2
     this.scene.fogDensity = 0.002
-    this.scene.fogColor = this.scene.clearColor
+    this.scene.fogColor = new Color3(
+      this.scene.clearColor.r,
+      this.scene.clearColor.g,
+      this.scene.clearColor.b,
+    )
   }
 
   private setupGameLoop(): void {

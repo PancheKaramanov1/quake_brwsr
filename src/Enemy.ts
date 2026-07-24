@@ -1,4 +1,4 @@
-import { Vector3, Mesh, Scene, StandardMaterial, Color3, PhysicsImpostor, Ray, AbstractMesh } from '@babylonjs/core'
+import { Vector3, Mesh, Scene, StandardMaterial, Color3 } from '@babylonjs/core'
 
 export class Enemy {
   public mesh!: Mesh // Definite assignment assertion
@@ -14,7 +14,6 @@ export class Enemy {
   private lastAttackTime: number = 0
   private attackCooldown: number = 1500 // 1.5 seconds between shots
   private patrolTarget!: Vector3 // Definite assignment assertion
-  private isPatrolling: boolean = true
   private _isDead: boolean = false // Renamed to avoid conflict
   private enemyProjectiles: Mesh[] = [] // Track enemy projectiles
 
@@ -60,7 +59,6 @@ export class Enemy {
     if (distanceToPlayer <= this.sightRange) {
       // Player is in range - switch to combat mode
       this.target = playerPosition.clone()
-      this.isPatrolling = false
       
       if (distanceToPlayer <= this.shootRange) {
         // Shoot at player from medium range
@@ -251,7 +249,7 @@ export class Enemy {
     }
   }
 
-  private attack(playerPosition: Vector3): void {
+  private attack(_playerPosition: Vector3): void {
     // Legacy melee attack - in a real game, this would do damage directly
     console.log(`Enemy ${this.mesh.name} attacks player for ${this.damage} damage!`)
     

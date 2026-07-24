@@ -1,23 +1,41 @@
 {
   "name": "fps-game",
   "version": "1.0.0",
-  "description": "Fast-paced FPS game built with Babylon.js",
+  "description": "Browser multiplayer FPS with Babylon.js client and authoritative Node server",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview"
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "preview": "vite preview",
+    "server:dev": "tsx watch server/index.ts",
+    "server:build": "esbuild server/index.ts --bundle --platform=node --format=esm --outfile=dist-server/index.js --packages=external",
+    "server:start": "node dist-server/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:unit": "vitest run tests/unit tests/simulation tests/protocol",
+    "test:integration": "vitest run tests/integration",
+    "test:load": "vitest run tests/load/twelvePlayers.test.ts --config vitest.load.config.ts --testTimeout=180000",
+    "test:soak": "vitest run tests/load/soak.test.ts --config vitest.load.config.ts --testTimeout=1800000",
+    "test:network": "vitest run tests/load/networkImpairment.test.ts --config vitest.load.config.ts --testTimeout=120000",
+    "test:browser": "vitest run tests/browser --config vitest.load.config.ts --testTimeout=180000",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit",
+    "lint": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit"
   },
   "dependencies": {
     "@babylonjs/core": "^6.33.1",
     "@babylonjs/gui": "^6.33.1",
     "@babylonjs/havok": "^1.1.4",
     "@babylonjs/loaders": "^6.33.1",
-    "@babylonjs/materials": "^6.33.1"
+    "@babylonjs/materials": "^6.33.1",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/node": "^20.8.0",
+    "@types/ws": "^8.5.13",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.19.0",
     "typescript": "^5.2.2",
-    "vite": "^4.4.9"
+    "vite": "^4.4.9",
+    "vitest": "^2.1.0"
   }
-} 
+}
