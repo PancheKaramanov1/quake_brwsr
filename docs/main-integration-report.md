@@ -198,9 +198,9 @@ git log --oneline master..feat/browser-multiplayer
 Push remote: origin
 Push URL: https://github.com/PancheKaramanov1/quake_brwsr.git
 Push command: git push origin master
-Push result: success (bc4f0d1..b0dd657  master -> master)
-Final local master SHA: b0dd657c632979d113ffe8fd2ed5d5a2f8d3615d
-Final remote master SHA: b0dd657c632979d113ffe8fd2ed5d5a2f8d3615d
+Push result: success (bc4f0d1..b0dd657, then b0dd657..4110284 master -> master)
+Final local master SHA: 4110284f619ba05fa79fa8b1c8bb7ab0d982d6b9
+Final remote master SHA: 4110284f619ba05fa79fa8b1c8bb7ab0d982d6b9
 Local/remote match: yes
 Branch protection encountered: no (direct push accepted)
 Railway deployment triggered: possible if Railway tracks master; in-memory matches would end
@@ -250,9 +250,9 @@ No database verified: yes
 No Redis verified: yes
 No Railway Volume verified: yes
 Secrets audit: pass (placeholders only; .env gitignored)
-Final master SHA: see tip after evidence amendment commit
-Remote master SHA: see tip after evidence amendment commit
-Local/remote master match: yes (verified after initial push; re-verified after amendment)
+Final master SHA: 4110284f619ba05fa79fa8b1c8bb7ab0d982d6b9
+Remote master SHA: 4110284f619ba05fa79fa8b1c8bb7ab0d982d6b9
+Local/remote master match: yes
 Push completed: yes
 Working tree clean: yes
 Remaining relevant commits outside master: none
