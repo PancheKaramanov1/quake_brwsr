@@ -9,6 +9,7 @@ TypeScript / Vite / Babylon.js first-person shooter with an optional **server-au
 - Shared fixed-tick simulation (60 Hz) with client prediction and remote interpolation
 - Server-authoritative rockets, damage, death, respawn, score, and match timer
 - Complex multi-zone map (`reactor-atrium-v1`) with shared AABB collision
+- One-process production hosting: Vite client + WebSocket server on the same origin
 
 ## Controls
 
@@ -22,7 +23,7 @@ TypeScript / Vite / Babylon.js first-person shooter with an optional **server-au
 | Tab | Scoreboard (multiplayer) |
 | F3 | Perf overlay (multiplayer) |
 
-## Quick start
+## Quick start (development)
 
 ```bash
 npm install
@@ -34,11 +35,26 @@ npm run server:dev
 npm run dev
 ```
 
-Open the client, choose **Multiplayer**, set a display name, connect to `ws://localhost:8080/ws`.
+Open the client, choose **Multiplayer**, set a display name, and join. On localhost the client discovers `http://localhost:8080`.
 
 ### Single-player only
 
 Choose **Single Player** from the main menu (no server required).
+
+## Local production (one process)
+
+```bash
+npm ci
+npm run build
+npm run server:build
+NODE_ENV=production \
+ALLOWED_ORIGINS=http://localhost:8080 \
+PUBLIC_SERVER_URL=http://localhost:8080 \
+PORT=8080 \
+npm run server:start
+```
+
+Then open `http://localhost:8080/` — static client and `ws://…/ws` share that origin.
 
 ## Scripts
 
@@ -57,9 +73,25 @@ Choose **Single Player** from the main menu (no server required).
 
 Copy `.env.example` to `.env`. Important variables:
 
-- `SERVER_PORT`, `MAX_PLAYERS`, `MATCH_DURATION_SECONDS`, `SCORE_LIMIT`
-- `ALLOWED_ORIGINS` (required in production)
-- `VITE_GAME_SERVER_URL` (client WebSocket URL; use `wss://` in production)
+- `PORT` / `SERVER_PORT` (Railway injects `PORT` — do not set it manually there)
+- `ALLOWED_ORIGINS` (required exact origins in production; no `*`)
+- `PUBLIC_SERVER_URL` (or rely on `RAILWAY_PUBLIC_DOMAIN`)
+- `MAX_PLAYERS`, `MATCH_DURATION_SECONDS`, `SCORE_LIMIT`
+
+## Railway
+
+Deploy as **one service, one replica**, Dockerfile builder, healthcheck `/health`. See:
+
+- [Deployment](docs/browser-multiplayer-deployment.md)
+- [Railway audit](docs/railway-deployment-audit.md)
+- [Railway implementation](docs/railway-deployment-implementation.md)
+
+```text
+Do not manually create PORT.
+Railway injects PORT.
+```
+
+No Supabase, database, Redis, or volume — all match state is in memory.
 
 ## Documentation
 
@@ -72,11 +104,18 @@ Copy `.env.example` to `.env`. Important variables:
 - [Map design](docs/multiplayer-map-design.md)
 - [Final report](docs/browser-multiplayer-final-report.md)
 
-## Docker (server)
+## Docker (one service)
 
 ```bash
-docker build -t quake-brwsr-server .
-docker run --rm -p 8080:8080 --env-file .env quake-brwsr-server
+docker build -t browser-fps-railway .
+
+docker run --rm \
+  -e PORT=8080 \
+  -e NODE_ENV=production \
+  -e ALLOWED_ORIGINS=http://127.0.0.1:8080 \
+  -e PUBLIC_SERVER_URL=http://127.0.0.1:8080 \
+  -p 8080:8080 \
+  browser-fps-railway
 ```
 
-Health: `GET /health` · Ready: `GET /ready` · Metrics: `GET /metrics`
+Health: `GET /health` · Ready: `GET /ready` · Status: `GET /status` · Alias: `GET /server-status` · Metrics: `GET /metrics`
