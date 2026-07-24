@@ -7,7 +7,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
-COPY tsconfig.json tsconfig.server.json vite.config.ts index.html ./
+COPY tsconfig.json tsconfig.node.json tsconfig.server.json vite.config.ts index.html ./
 COPY src ./src
 COPY server ./server
 
