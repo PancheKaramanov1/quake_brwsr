@@ -21,6 +21,7 @@ export function createTestServerConfig(overrides: Partial<ServerConfig> = {}): S
     port: 0,
     publicUrl: 'http://127.0.0.1:0',
     wsPath: DEFAULT_WS_PATH,
+    clientDist: 'dist',
     tickRate: TICK_RATE,
     snapshotRate: SNAPSHOT_RATE,
     maxPlayers: MAX_PLAYERS,
