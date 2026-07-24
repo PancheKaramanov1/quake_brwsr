@@ -1,3 +1,7 @@
+/**
+ * Privacy-safe operational logging.
+ * Never log IPs, forwarded headers, display names, reconnect tokens, raw packets, or payloads.
+ */
 export class SecurityLogger {
   constructor(private readonly enabled = true) {}
 
@@ -5,23 +9,25 @@ export class SecurityLogger {
     if (this.enabled) console.log(`[security] ${message}`)
   }
 
-  rejectedConnection(addr: string, reason: string): void {
-    this.info(`reject addr=${addr} reason=${reason}`)
+  rejectedConnection(reason: string, connectionId?: string): void {
+    const conn = connectionId ? ` conn=${connectionId}` : ''
+    this.info(`connection_rejected reason=${reason}${conn}`)
   }
 
-  invalidMessage(addr: string, code: string): void {
-    this.info(`invalid_message addr=${addr} code=${code}`)
+  invalidMessage(code: string, connectionId?: string): void {
+    const conn = connectionId ? ` conn=${connectionId}` : ''
+    this.info(`protocol_error message_type=${code}${conn}`)
   }
 
   rateLimit(playerId: number, kind: string): void {
-    this.info(`rate_limit player=${playerId} kind=${kind}`)
+    this.info(`rate_limit_violation category=${kind} player=${playerId}`)
   }
 
   movementViolation(playerId: number, kind: string): void {
-    this.info(`movement_violation player=${playerId} kind=${kind}`)
+    this.info(`movement_violation kind=${kind} player=${playerId}`)
   }
 
   weaponViolation(playerId: number, kind: string): void {
-    this.info(`weapon_violation player=${playerId} kind=${kind}`)
+    this.info(`weapon_violation kind=${kind} player=${playerId}`)
   }
 }

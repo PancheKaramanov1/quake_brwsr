@@ -12,10 +12,12 @@ import {
   MIN_PLAYERS_TO_START,
   PRE_MATCH_COUNTDOWN_SECONDS,
   PROTOCOL_VERSION,
+  SERVER_RESTART_MESSAGE,
   SNAPSHOT_RATE,
   TICK_BUDGET_MS,
   TICK_DT,
   TICK_RATE,
+  WS_CLOSE_SERVICE_RESTART,
 } from '../../src/shared/simulation/constants.js'
 import { encodeMessage, decodeMessage, validateDisplayName } from '../../src/shared/protocol/codec.js'
 import {
@@ -54,6 +56,7 @@ export class MatchInstance {
   private tickTimer: ReturnType<typeof setInterval> | null = null
   private running = false
   private resultsTimer: ReturnType<typeof setTimeout> | null = null
+  private readonly reconnectTimers = new Set<ReturnType<typeof setTimeout>>()
   metrics = {
     tickCount: 0,
     tickDurations: [] as number[],
@@ -119,6 +122,10 @@ export class MatchInstance {
       clearTimeout(this.resultsTimer)
       this.resultsTimer = null
     }
+    for (const timer of this.reconnectTimers) {
+      clearTimeout(timer)
+    }
+    this.reconnectTimers.clear()
   }
 
   activePlayerCount(): number {
@@ -344,7 +351,8 @@ export class MatchInstance {
     if (player) player.connected = false
 
     // Cleanup after grace
-    setTimeout(() => {
+    const timer = setTimeout(() => {
+      this.reconnectTimers.delete(timer)
       const s = this.sessions.get(session.sessionId)
       if (s && !s.connection) {
         this.world.removePlayer(s.playerId)
@@ -358,12 +366,13 @@ export class MatchInstance {
         )
       }
     }, this.config.reconnectGraceMs)
+    this.reconnectTimers.add(timer)
   }
 
   handleMessage(conn: ClientConnection, data: Uint8Array): void {
     this.metrics.bytesIn += data.byteLength
     if (data.byteLength > MAX_MESSAGE_BYTES) {
-      this.securityLog.invalidMessage(conn.remoteAddress, 'oversized')
+      this.securityLog.invalidMessage('oversized', conn.connectionId)
       conn.close(1009, 'too large')
       return
     }
@@ -375,7 +384,7 @@ export class MatchInstance {
 
     const decoded = decodeMessage(data)
     if (!decoded.ok) {
-      this.securityLog.invalidMessage(conn.remoteAddress, decoded.error.code)
+      this.securityLog.invalidMessage(decoded.error.code, conn.connectionId)
       this.metrics.errors += 1
       this.metrics.invalidMessages += 1
       if (decoded.error.code === 'version_mismatch') {
@@ -415,7 +424,7 @@ export class MatchInstance {
         // Reserved for multi-match directory; single-match server ignores.
         break
       default:
-        this.securityLog.invalidMessage(conn.remoteAddress, `unexpected_${decoded.type}`)
+        this.securityLog.invalidMessage(`unexpected_${decoded.type}`, conn.connectionId)
         this.metrics.invalidMessages += 1
         break
     }
@@ -668,7 +677,10 @@ export class MatchInstance {
 
   private reject(conn: ClientConnection, reason: RejectReason, message: string): void {
     this.metrics.rejects += 1
-    this.securityLog.rejectedConnection(conn.remoteAddress, RejectReason[reason] ?? String(reason))
+    this.securityLog.rejectedConnection(
+      RejectReason[reason] ?? String(reason),
+      conn.connectionId,
+    )
     conn.send(encodeMessage(MessageType.Reject, { reason, message }))
     conn.close(1008, message)
   }
@@ -696,11 +708,11 @@ export class MatchInstance {
     this.broadcast(
       encodeMessage(MessageType.ServerError, {
         code: 1,
-        message: 'Server shutting down',
+        message: SERVER_RESTART_MESSAGE,
       }),
     )
     for (const session of this.sessions.values()) {
-      session.connection?.close(1001, 'shutdown')
+      session.connection?.close(WS_CLOSE_SERVICE_RESTART, 'service_restart')
     }
   }
 
