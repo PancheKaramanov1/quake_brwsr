@@ -74,3 +74,16 @@ export const DEFAULT_SERVER_PORT = 8080
 export const DEFAULT_WS_PATH = '/ws'
 export const DEFAULT_SERVER_NAME = 'Reactor Atrium FFA'
 export const DEFAULT_SERVER_REGION = 'local'
+
+/** Player-facing copy when the live process is replaced (Railway deploy / SIGTERM). */
+export const SERVER_RESTART_MESSAGE =
+  'The live server restarted, so this match has ended.'
+
+/** WebSocket close code: Service Restart (RFC 6455). */
+export const WS_CLOSE_SERVICE_RESTART = 1012
+
+/** Graceful shutdown soft target (ms). */
+export const SHUTDOWN_GRACE_MS = 10_000
+
+/** Absolute force-exit deadline after SIGTERM (ms). */
+export const SHUTDOWN_FORCE_EXIT_MS = 20_000

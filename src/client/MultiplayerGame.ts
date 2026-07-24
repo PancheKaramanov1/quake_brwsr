@@ -26,7 +26,9 @@ import {
   MOUSE_SENSITIVITY,
   PLAYER_EYE_OFFSET,
   PLAYER_HEIGHT,
+  SERVER_RESTART_MESSAGE,
   TICK_DT,
+  WS_CLOSE_SERVICE_RESTART,
 } from '../shared/simulation/constants.js'
 import { ARENA_MAP, buildAABBs, type MapBox } from '../shared/simulation/mapDefinition.js'
 import { FixedTimestep } from '../shared/simulation/fixedTimestep.js'
@@ -132,6 +134,7 @@ export class MultiplayerGame {
   private scoreboardEl: HTMLDivElement
   private perfEl: HTMLDivElement
   private resultsShown = false
+  private serverRestartHandled = false
 
   private unsubSnapshot: (() => void) | null = null
   private unsubEvent: (() => void) | null = null
@@ -205,6 +208,7 @@ export class MultiplayerGame {
 
   async startSession(url: string, displayName: string): Promise<void> {
     try {
+      this.serverRestartHandled = false
       await this.client.connect(url, displayName)
       this.menu?.hide()
       this.hudRoot.style.display = 'block'
@@ -293,14 +297,64 @@ export class MultiplayerGame {
           this.showResults(standings)
           break
         }
-        case MessageType.Disconnect:
-          this.menu?.show()
-          this.menu?.showReconnectStatus('Disconnected — reconnect from Multiplayer')
+        case MessageType.ServerError: {
+          const message =
+            typeof payload === 'object' &&
+            payload !== null &&
+            'message' in payload
+              ? String((payload as { message: string }).message)
+              : SERVER_RESTART_MESSAGE
+          this.handleServerRestart(message)
           break
+        }
+        case MessageType.Disconnect: {
+          const reason =
+            typeof payload === 'object' &&
+            payload !== null &&
+            'reason' in payload
+              ? String((payload as { reason: string }).reason)
+              : ''
+          if (
+            reason === SERVER_RESTART_MESSAGE ||
+            reason === 'service_restart' ||
+            reason === `code_${WS_CLOSE_SERVICE_RESTART}` ||
+            reason.includes(String(WS_CLOSE_SERVICE_RESTART)) ||
+            this.client.rejectReason === SERVER_RESTART_MESSAGE
+          ) {
+            this.handleServerRestart(SERVER_RESTART_MESSAGE)
+          } else {
+            this.running = false
+            this.hudRoot.style.display = 'none'
+            this.prediction.clear()
+            this.interpolator.clear()
+            this.menu?.show()
+            this.menu?.showReconnectStatus('Disconnected — reconnect from Multiplayer')
+          }
+          break
+        }
         default:
           break
       }
     })
+  }
+
+  private handleServerRestart(message: string): void {
+    if (this.serverRestartHandled) return
+    this.serverRestartHandled = true
+    this.running = false
+    this.hudRoot.style.display = 'none'
+    this.prediction.clear()
+    this.interpolator.clear()
+    this.client.clearSessionCredentials()
+    try {
+      this.client.disconnect('server_restart')
+    } catch {
+      // already closed
+    }
+    this.menu?.showServerRestart()
+    if (message && message !== SERVER_RESTART_MESSAGE) {
+      this.menu?.setStatus(message, true)
+    }
   }
 
   private bindKeys(): void {

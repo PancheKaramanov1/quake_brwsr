@@ -22,6 +22,8 @@ import {
 import {
   HEARTBEAT_INTERVAL_MS,
   PROTOCOL_VERSION,
+  SERVER_RESTART_MESSAGE,
+  WS_CLOSE_SERVICE_RESTART,
 } from '../../shared/simulation/constants.js'
 import { BrowserTransport } from './BrowserTransport.js'
 
@@ -92,7 +94,7 @@ function rejectReasonLabel(reason: RejectReason): string {
     case RejectReason.Banned:
       return 'Banned'
     case RejectReason.Shutdown:
-      return 'Server shutting down'
+      return SERVER_RESTART_MESSAGE
     case RejectReason.AuthFailed:
       return 'Authentication failed'
     case RejectReason.Duplicate:
@@ -100,6 +102,13 @@ function rejectReasonLabel(reason: RejectReason): string {
     default:
       return 'Connection rejected'
   }
+}
+
+function isServiceRestartClose(reason: string): boolean {
+  if (reason === 'service_restart' || reason === SERVER_RESTART_MESSAGE) return true
+  if (reason === `code_${WS_CLOSE_SERVICE_RESTART}`) return true
+  if (reason.includes(String(WS_CLOSE_SERVICE_RESTART))) return true
+  return false
 }
 
 export class GameClient {
@@ -278,11 +287,21 @@ export class GameClient {
       if (this.state !== ConnectionState.Closed) {
         this.state = ConnectionState.Disconnected
       }
+      if (isServiceRestartClose(reason)) {
+        this.clearSessionCredentials()
+        this.rejectReason = SERVER_RESTART_MESSAGE
+      }
       this.emitEvent(MessageType.Disconnect, { reason })
     })
     this.transport.onError((_err) => {
       // Connection errors surface via close / reject
     })
+  }
+
+  /** Drop reconnect credentials — match no longer exists after process restart. */
+  clearSessionCredentials(): void {
+    this.sessionId = null
+    this.reconnectToken = null
   }
 
   private sendHello(displayName: string): void {
@@ -419,6 +438,12 @@ export class GameClient {
       }
       case MessageType.ServerError:
         this.rejectReason = decoded.payload.message
+        if (
+          decoded.payload.message === SERVER_RESTART_MESSAGE ||
+          decoded.payload.code === 1
+        ) {
+          this.clearSessionCredentials()
+        }
         this.emitEvent(MessageType.ServerError, decoded.payload)
         break
       default:
