@@ -5,8 +5,8 @@ Initial branch: feat/browser-multiplayer-hardening
 Initial HEAD: d86b798305fd47a331af032ef90a085d0e47bb97
 Audited HEAD matched: YES
 Final branch: feat/browser-multiplayer-hardening
-Final HEAD: e1291fea3bb5bb6fa7e7b4392ebb083f928c488c
-Working tree: clean
+Final HEAD: 810f0484c79257a25e14a66c72531c5874270a5e
+Working tree: clean after implementation commits
 
 Railway PORT support: YES (PORT → SERVER_PORT → 8080; strict 1–65535)
 Host binding: YES (default 0.0.0.0)
