@@ -149,26 +149,38 @@ export class GameWorld {
       TICK_DT,
     )
 
-    stepWeapon(player.weapon, TICK_DT)
+    // Weapon cooldown/reload advances once per tick in step(), not here.
 
     if (cmd.reload) {
       tryStartReload(player.weapon)
     }
 
     if (cmd.shoot) {
-      this.tryPlayerFire(player)
+      const fire = this.tryPlayerFire(player)
+      if (!fire.ok && fire.reason) {
+        this.events.push({ type: 'fire_rejected', data: { playerId: player.id, reason: fire.reason } })
+      }
     }
   }
 
-  tryPlayerFire(player: CombatPlayer): void {
-    if (!player.sim.alive) return
+  tryPlayerFire(player: CombatPlayer): { ok: boolean; reason?: string } {
+    if (!player.sim.alive) return { ok: false, reason: 'dead' }
     clearSpawnProtectionOnFire(player)
     const origin = eyePosition(player.sim.position, PLAYER_EYE_OFFSET)
     const dir = vec3()
     yawPitchToDirection(player.sim.yaw, player.sim.pitch, dir)
+    if (!Number.isFinite(dir.x) || !Number.isFinite(dir.y) || !Number.isFinite(dir.z)) {
+      return { ok: false, reason: 'direction' }
+    }
+    if (Math.hypot(dir.x, dir.y, dir.z) < 1e-6) {
+      return { ok: false, reason: 'direction' }
+    }
     origin.x += dir.x * 0.8
     origin.y += dir.y * 0.8
     origin.z += dir.z * 0.8
+    if (!Number.isFinite(origin.x) || !Number.isFinite(origin.y) || !Number.isFinite(origin.z)) {
+      return { ok: false, reason: 'origin' }
+    }
 
     const result = tryFireRocket(
       player.weapon,
@@ -194,7 +206,9 @@ export class GameWorld {
           vz: result.projectile.velocity.z,
         },
       })
+      return { ok: true }
     }
+    return { ok: false, reason: result.reason ?? 'unknown' }
   }
 
   step(): void {
