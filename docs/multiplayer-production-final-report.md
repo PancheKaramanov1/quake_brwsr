@@ -4,7 +4,7 @@
 Initial branch: master
 Initial HEAD: 5e5cf1407fff41d8e0dafa6e0c92ff3abba8e197
 Final branch: fix/multiplayer-gameplay-and-map (merged to master)
-Final HEAD: (see git after push)
+Final HEAD: ee105acb460762400a5ac3a99e12932fe8ea93e0
 Railway deployment branch: master
 Production domain tested: https://quakebrwsr-production.up.railway.app
 Server instance ID test: exposed via /status + Welcome (local PASS; prod after deploy)
@@ -43,10 +43,10 @@ Single-player regression: SP path unchanged (Arena.ts)
 Client build: PASS (~4.03 MB JS)
 Server build: PASS (~115 KB)
 Tests: 104 PASS (+ load + browser)
-Railway deployment: push master; verify ALLOWED_ORIGINS + protocol v2
+Railway deployment: pushed master ee105ac; verify ALLOWED_ORIGINS + protocol v2
 Known limitations: PROTOCOL_VERSION bumped to 2 (old clients rejected until refresh); Redeploy ends in-memory match; ~4MB Babylon bundle
 Remaining blockers: post-deploy laptop+phone confirmation; confirm Railway ALLOWED_ORIGINS still exact origin
-Final status: IMPLEMENTATION COMPLETE — awaiting Railway redeploy verification
+Final status: PUSHED — verify Railway redeploy shows protocolVersion 2 + instance IDs
 ```
 
 ## Root causes (summary)
