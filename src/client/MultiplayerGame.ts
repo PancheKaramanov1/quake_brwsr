@@ -22,12 +22,12 @@ import {
   type StandingEntry,
 } from '../shared/protocol/messages.js'
 import {
+  BUILD_VERSION,
   MAX_PITCH,
   MOUSE_SENSITIVITY,
   PLAYER_EYE_OFFSET,
   PLAYER_HEIGHT,
   SERVER_RESTART_MESSAGE,
-  TICK_DT,
   WS_CLOSE_SERVICE_RESTART,
 } from '../shared/simulation/constants.js'
 import { ARENA_MAP, buildAABBs, type MapBox } from '../shared/simulation/mapDefinition.js'
@@ -44,6 +44,7 @@ import {
   type PendingInput,
 } from './net/prediction.js'
 import { MultiplayerMenu } from './ui/MultiplayerMenu.js'
+import { MobileControls } from './ui/MobileControls.js'
 
 const PLAYER_COLORS: ReadonlyArray<Color3> = [
   new Color3(0.9, 0.25, 0.2),
@@ -102,6 +103,18 @@ export class MultiplayerGame {
   private interpolator = new SnapshotInterpolator()
   private timestep = new FixedTimestep()
   private menu: MultiplayerMenu | null = null
+  private mobile: MobileControls | null = null
+  private lastAckFromCorrection = 0
+  private connectionLabel = 'offline'
+  private serverInstanceId = ''
+  private matchInstanceId = ''
+  private buildVersion = BUILD_VERSION
+  private spawnProtectUntil = 0
+  private hitMarkerUntil = 0
+  private invertY = false
+  private mouseSensPage = MOUSE_SENSITIVITY
+  private mobileLookSens = 0.004
+  private colliderDebugMeshes: Mesh[] = []
 
   private arenaMeshes: Mesh[] = []
   private remotes = new Map<number, RemoteVisual>()
@@ -144,7 +157,9 @@ export class MultiplayerGame {
   constructor(
     canvas: HTMLCanvasElement,
     private readonly overlayParent: HTMLElement = document.body,
+    menu: MultiplayerMenu | null = null,
   ) {
+    this.menu = menu
     this.engine = new Engine(canvas, true, {
       preserveDrawingBuffer: true,
       stencil: true,
@@ -159,6 +174,13 @@ export class MultiplayerGame {
     light.intensity = 0.95
 
     this.buildArena()
+    if (
+      typeof window !== 'undefined' &&
+      (new URLSearchParams(window.location.search).has('collisionDebug') ||
+        new URLSearchParams(window.location.search).get('debug') === 'collision')
+    ) {
+      this.enableCollisionDebug()
+    }
 
     const spawn = ARENA_MAP.spawns[0]
     const start = new Vector3(spawn?.x ?? 0, (spawn?.y ?? 1) + PLAYER_EYE_OFFSET, spawn?.z ?? 0)
@@ -169,6 +191,7 @@ export class MultiplayerGame {
     this.pitch = 0
 
     this.input = new InputManager(canvas)
+    this.mobile = new MobileControls(this.overlayParent)
 
     const colliders = buildAABBs(ARENA_MAP)
     const initial = createPlayerSimState(
@@ -194,6 +217,10 @@ export class MultiplayerGame {
     this.bindNet()
   }
 
+  setMenu(menu: MultiplayerMenu | null): void {
+    this.menu = menu
+  }
+
   /** Show entry menu; starts session after Connect. */
   showMenu(onSinglePlayer: () => void): MultiplayerMenu {
     this.menu?.dispose()
@@ -209,16 +236,22 @@ export class MultiplayerGame {
   async startSession(url: string, displayName: string): Promise<void> {
     try {
       this.serverRestartHandled = false
+      this.connectionLabel = 'connecting'
       await this.client.connect(url, displayName)
+      this.connectionLabel = 'in_match'
       this.menu?.hide()
       this.hudRoot.style.display = 'block'
+      this.mobile?.show()
       this.running = true
       this.lastFrameMs = performance.now()
       this.engine.runRenderLoop(() => this.frame())
       window.addEventListener('resize', this.onResize)
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Connect failed'
+      this.connectionLabel = 'offline'
+      this.menu?.show()
       this.menu?.showReject(msg)
+      throw err
     }
   }
 
@@ -233,9 +266,10 @@ export class MultiplayerGame {
     this.unsubSnapshot?.()
     this.unsubEvent?.()
     this.client.dispose()
-    this.menu?.dispose()
+    this.mobile?.dispose()
     this.hudRoot.remove()
     for (const m of this.arenaMeshes) m.dispose()
+    this.disableCollisionDebug()
     for (const r of this.remotes.values()) r.mesh.dispose()
     for (const r of this.rockets.values()) r.mesh.dispose()
     for (const e of this.explosions) e.mesh.dispose()
@@ -260,9 +294,24 @@ export class MultiplayerGame {
           )
           this.running = false
           break
-        case MessageType.Welcome:
+        case MessageType.Welcome: {
+          const w = payload as {
+            mapId: string
+            serverInstanceId?: string
+            matchInstanceId?: string
+            buildVersion?: string
+          }
+          if (w.mapId && w.mapId !== ARENA_MAP.id) {
+            this.menu?.show()
+            this.menu?.setStatus(`Map mismatch: server ${w.mapId}, client ${ARENA_MAP.id}`, true)
+          }
+          this.serverInstanceId = w.serverInstanceId ?? ''
+          this.matchInstanceId = w.matchInstanceId ?? ''
+          this.buildVersion = w.buildVersion ?? BUILD_VERSION
+          this.connectionLabel = 'joined'
           this.client.sendReady()
           break
+        }
         case MessageType.LocalCorrection: {
           const c = payload as {
             ackSeq: number
@@ -274,11 +323,41 @@ export class MultiplayerGame {
             vz: number
             yaw: number
             pitch: number
+            grounded?: boolean
+            jumpVelocity?: number
+            dashRemaining?: number
+            dashCooldown?: number
+            jumpCooldown?: number
+            dashVx?: number
+            dashVy?: number
+            dashVz?: number
+            alive?: boolean
           }
+          this.lastAckFromCorrection = c.ackSeq
           this.prediction.reconcile(
             c.ackSeq,
-            simStateFromAuthoritative({ ...c, alive: true }),
+            simStateFromAuthoritative({
+              ...c,
+              alive: c.alive ?? true,
+              grounded: c.grounded,
+              jumpVelocity: c.jumpVelocity,
+              dashRemaining: c.dashRemaining,
+              dashCooldown: c.dashCooldown,
+              jumpCooldown: c.jumpCooldown,
+              dashVx: c.dashVx,
+              dashVy: c.dashVy,
+              dashVz: c.dashVz,
+            }),
           )
+          break
+        }
+        case MessageType.DamageEvent: {
+          const d = payload as { victimId: number; attackerId: number; amount: number }
+          if (d.victimId === this.client.localPlayerId) {
+            this.hitMarkerUntil = performance.now() + 120
+          } else if (d.attackerId === this.client.localPlayerId) {
+            this.hitMarkerUntil = performance.now() + 180
+          }
           break
         }
         case MessageType.ProjectileSpawn:
@@ -325,8 +404,10 @@ export class MultiplayerGame {
           } else {
             this.running = false
             this.hudRoot.style.display = 'none'
+            this.mobile?.hide()
             this.prediction.clear()
             this.interpolator.clear()
+            this.connectionLabel = 'offline'
             this.menu?.show()
             this.menu?.showReconnectStatus('Disconnected — reconnect from Multiplayer')
           }
@@ -343,8 +424,10 @@ export class MultiplayerGame {
     this.serverRestartHandled = true
     this.running = false
     this.hudRoot.style.display = 'none'
+    this.mobile?.hide()
     this.prediction.clear()
     this.interpolator.clear()
+    this.connectionLabel = 'server_restarting'
     this.client.clearSessionCredentials()
     try {
       this.client.disconnect('server_restart')
@@ -370,6 +453,11 @@ export class MultiplayerGame {
         e.preventDefault()
         this.showPerf = !this.showPerf
         this.perfEl.style.display = this.showPerf ? 'block' : 'none'
+      }
+      if (e.code === 'F4') {
+        e.preventDefault()
+        if (this.colliderDebugMeshes.length === 0) this.enableCollisionDebug()
+        else this.disableCollisionDebug()
       }
     }
     this.keyUpHandler = (e: KeyboardEvent) => {
@@ -420,24 +508,41 @@ export class MultiplayerGame {
     }
 
     const raw = this.input.getInputState()
-    this.applyLook(raw)
+    const mobile = this.mobile?.sample() ?? {
+      moveX: 0,
+      moveY: 0,
+      lookX: 0,
+      lookY: 0,
+      jump: false,
+      shoot: false,
+      scoreboard: false,
+    }
 
-    let moveX = 0
-    let moveY = 0
+    this.applyLook(raw, mobile.lookX, mobile.lookY)
+
+    let moveX = mobile.moveX
+    let moveY = mobile.moveY
     if (raw.left) moveX -= 1
     if (raw.right) moveX += 1
     if (raw.forward) moveY += 1
     if (raw.backward) moveY -= 1
+    const axisLen = Math.hypot(moveX, moveY)
+    if (axisLen > 1) {
+      moveX /= axisLen
+      moveY /= axisLen
+    }
+
+    if (mobile.scoreboard) this.showScoreboard = true
 
     this.client.advanceClientTick()
     const pending: PendingInput = {
       seq: 0,
       moveX,
       moveY,
-      jump: raw.jump,
+      jump: raw.jump || mobile.jump,
       crouch: this.crouchHeld,
       dash: raw.dash,
-      shoot: raw.shoot,
+      shoot: raw.shoot || mobile.shoot,
       reload: this.reloadHeld,
       yaw: this.yaw,
       pitch: this.pitch,
@@ -458,10 +563,15 @@ export class MultiplayerGame {
     this.prediction.applyLocalPrediction(pending)
   }
 
-  private applyLook(input: InputState): void {
-    if (!this.input.isPointerLocked()) return
-    this.yaw += input.mouseX * MOUSE_SENSITIVITY
-    this.pitch -= input.mouseY * MOUSE_SENSITIVITY
+  private applyLook(input: InputState, touchLookX = 0, touchLookY = 0): void {
+    const sens = this.mobile?.isActive ? this.mobileLookSens : this.mouseSensPage
+    if (this.input.isPointerLocked()) {
+      this.yaw += input.mouseX * sens
+      const dy = this.invertY ? input.mouseY : -input.mouseY
+      this.pitch += dy * sens
+    }
+    this.yaw += touchLookX * this.mobileLookSens
+    this.pitch += (this.invertY ? touchLookY : -touchLookY) * this.mobileLookSens
     if (this.pitch > MAX_PITCH) this.pitch = MAX_PITCH
     if (this.pitch < -MAX_PITCH) this.pitch = -MAX_PITCH
   }
@@ -475,6 +585,8 @@ export class MultiplayerGame {
     const local = snap.players.find((p) => p.id === localId)
     if (!local) return
 
+    // Local reconciliation is driven by LocalCorrection only (avoids double soft-blend).
+    // Snapshot resets prediction only when awaiting (tab resume / clear) or first join.
     if (this.prediction.isAwaitingSnapshot || this.prediction.pendingCount === 0) {
       this.prediction.reset(
         simStateFromAuthoritative({
@@ -491,21 +603,10 @@ export class MultiplayerGame {
       )
       this.yaw = local.yaw
       this.pitch = local.pitch
-    } else {
-      this.prediction.reconcile(
-        snap.ackSeq,
-        simStateFromAuthoritative({
-          x: local.x,
-          y: local.y,
-          z: local.z,
-          vx: local.vx,
-          vy: local.vy,
-          vz: local.vz,
-          yaw: local.yaw,
-          pitch: local.pitch,
-          alive: local.alive,
-        }),
-      )
+    }
+
+    if ((local.flags & 4) !== 0) {
+      this.spawnProtectUntil = performance.now() + 500
     }
 
     // Sync rockets from snapshot set
@@ -637,6 +738,30 @@ export class MultiplayerGame {
     }
   }
 
+  private enableCollisionDebug(): void {
+    this.disableCollisionDebug()
+    for (const box of ARENA_MAP.boxes) {
+      if (box.collision === false) continue
+      const mesh = MeshBuilder.CreateBox(
+        `coldbg_${box.id}`,
+        { width: box.w, height: box.h, depth: box.d },
+        this.scene,
+      )
+      mesh.position.set(box.cx, box.cy, box.cz)
+      const mat = new StandardMaterial(`coldbgMat_${box.id}`, this.scene)
+      mat.diffuseColor = new Color3(0.1, 0.9, 0.3)
+      mat.alpha = 0.25
+      mat.wireframe = true
+      mesh.material = mat
+      this.colliderDebugMeshes.push(mesh)
+    }
+  }
+
+  private disableCollisionDebug(): void {
+    for (const m of this.colliderDebugMeshes) m.dispose()
+    this.colliderDebugMeshes = []
+  }
+
   private buildArena(): void {
     const ground = MeshBuilder.CreateGround(
       'mpGround',
@@ -656,6 +781,9 @@ export class MultiplayerGame {
       )
       mesh.position.set(box.cx, box.cy, box.cz)
       mesh.material = this.getMaterial(`kind_${box.kind}`, kindColor(box.kind))
+      if (box.collision === false) {
+        mesh.visibility = 0.55
+      }
       this.arenaMeshes.push(mesh)
     }
   }
@@ -839,16 +967,44 @@ export class MultiplayerGame {
 
     if (this.showPerf) {
       const snap = this.client.lastSnapshot
+      const diag = this.prediction.getDiagnosticSummary()
+      const protect =
+        performance.now() < this.spawnProtectUntil ? 'SPAWN PROTECT' : ''
+      const hit = performance.now() < this.hitMarkerUntil ? 'HIT' : ''
       this.perfEl.textContent = [
         `fps  ${this.fps.toFixed(0)}`,
         `ping ${Math.round(this.client.ping)} ms`,
         `players ${this.client.players.size}`,
         `phase ${MatchPhase[this.client.phase] ?? this.client.phase}`,
-        `snap tick ${snap?.tick ?? '—'}`,
+        `conn ${this.connectionLabel}`,
+        `srv ${this.serverInstanceId.slice(0, 8) || '—'}`,
+        `match ${this.matchInstanceId.slice(0, 8) || '—'}`,
+        `build ${this.buildVersion}`,
+        `snap tick ${snap?.tick ?? '—'} ack ${this.lastAckFromCorrection}`,
         `interp buf ${this.interpolator.bufferSize}`,
         `pending ${this.prediction.pendingCount}`,
-        `dt ${TICK_DT.toFixed(4)}`,
-      ].join('\n')
+        `corr p50 ${diag.correctionP50.toFixed(3)} p95 ${diag.correctionP95.toFixed(3)} max ${diag.correctionMax.toFixed(3)}`,
+        `snaps ${diag.hardSnapCount} soft ${diag.softBlendCount} ignore ${diag.ignoredCorrectionCount}`,
+        `rockets ${this.rockets.size}`,
+        protect,
+        hit,
+      ]
+        .filter(Boolean)
+        .join('\n')
+    }
+
+    // Lightweight production-safe line in top-right when not showing full F3
+    const quality =
+      this.client.ping < 80 ? 'good' : this.client.ping < 160 ? 'ok' : 'poor'
+    if (!this.showPerf) {
+      // keep kill feed area; ping already on bar
+      void quality
+    }
+
+    if (performance.now() < this.spawnProtectUntil) {
+      this.hudHealth.style.color = '#7ec8ff'
+    } else {
+      this.hudHealth.style.color = ''
     }
 
     if (this.client.phase === MatchPhase.Results && !this.resultsShown) {

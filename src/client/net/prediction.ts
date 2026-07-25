@@ -1,8 +1,11 @@
 /** Local player prediction + server reconciliation. */
 
 import {
+  CORRECTION_IGNORE_THRESHOLD,
   CORRECTION_SMOOTH_FACTOR,
   CORRECTION_SNAP_THRESHOLD,
+  MAX_PENDING_INPUTS,
+  MAX_REPLAY_INPUTS,
   TICK_DT,
 } from '../../shared/simulation/constants.js'
 import type { AABB } from '../../shared/simulation/math.js'
@@ -32,6 +35,7 @@ export interface PredictionDiagnostics {
   hardSnapCount: number
   inputReplayCount: number
   softBlendCount: number
+  ignoredCorrectionCount: number
 }
 
 function cloneSimState(src: PlayerSimState): PlayerSimState {
@@ -81,12 +85,14 @@ export class ClientPrediction {
   private colliders: readonly AABB[]
   private floorY: number
   private awaitingSnapshot = false
+  private lastAckSeq = 0
   readonly diagnostics: PredictionDiagnostics = {
     correctionCount: 0,
     correctionDistances: [],
     hardSnapCount: 0,
     inputReplayCount: 0,
     softBlendCount: 0,
+    ignoredCorrectionCount: 0,
   }
 
   constructor(initial: PlayerSimState, colliders: readonly AABB[], floorY: number) {
@@ -105,6 +111,10 @@ export class ClientPrediction {
 
   get isAwaitingSnapshot(): boolean {
     return this.awaitingSnapshot
+  }
+
+  get acknowledgedSeq(): number {
+    return this.lastAckSeq
   }
 
   setColliders(colliders: readonly AABB[], floorY: number): void {
@@ -133,7 +143,7 @@ export class ClientPrediction {
       return this.predicted
     }
     this.pending.push({ ...input })
-    while (this.pending.length > 128) {
+    while (this.pending.length > MAX_PENDING_INPUTS) {
       this.pending.shift()
     }
     const move = inputFromAxes(
@@ -150,14 +160,19 @@ export class ClientPrediction {
 
   /**
    * Rewind to authoritative state at ackSeq, then replay unacked inputs.
-   * Soft-blends position when error is small; snaps when large.
+   * Ignores tiny error; soft-blends moderate; snaps large.
    */
   reconcile(ackSeq: number, authoritative: PlayerSimState): PlayerSimState {
     this.awaitingSnapshot = false
+    if (ackSeq < this.lastAckSeq) {
+      return this.predicted
+    }
+    this.lastAckSeq = ackSeq
     this.pending = this.pending.filter((p) => p.seq > ackSeq)
 
     const corrected = cloneSimState(authoritative)
-    for (const input of this.pending) {
+    const replay = this.pending.slice(0, MAX_REPLAY_INPUTS)
+    for (const input of replay) {
       const move = inputFromAxes(
         input.moveX,
         input.moveY,
@@ -175,6 +190,26 @@ export class ClientPrediction {
     this.diagnostics.correctionDistances.push(error)
     if (this.diagnostics.correctionDistances.length > 600) {
       this.diagnostics.correctionDistances.shift()
+    }
+
+    if (error < CORRECTION_IGNORE_THRESHOLD) {
+      this.diagnostics.ignoredCorrectionCount += 1
+      // Still sync non-visual authoritative fields so dash/ground stay consistent.
+      this.predicted.velocity.x = corrected.velocity.x
+      this.predicted.velocity.y = corrected.velocity.y
+      this.predicted.velocity.z = corrected.velocity.z
+      this.predicted.yaw = corrected.yaw
+      this.predicted.pitch = corrected.pitch
+      this.predicted.jumpVelocity = corrected.jumpVelocity
+      this.predicted.grounded = corrected.grounded
+      this.predicted.dashVelocity.x = corrected.dashVelocity.x
+      this.predicted.dashVelocity.y = corrected.dashVelocity.y
+      this.predicted.dashVelocity.z = corrected.dashVelocity.z
+      this.predicted.dashRemaining = corrected.dashRemaining
+      this.predicted.dashCooldown = corrected.dashCooldown
+      this.predicted.jumpCooldown = corrected.jumpCooldown
+      this.predicted.alive = corrected.alive
+      return this.predicted
     }
 
     if (error < CORRECTION_SNAP_THRESHOLD) {
@@ -212,6 +247,8 @@ export class ClientPrediction {
     correctionMax: number
     hardSnapCount: number
     inputReplayCount: number
+    ignoredCorrectionCount: number
+    softBlendCount: number
   } {
     const sorted = [...this.diagnostics.correctionDistances].sort((a, b) => a - b)
     return {
@@ -221,11 +258,13 @@ export class ClientPrediction {
       correctionMax: sorted.length ? sorted[sorted.length - 1]! : 0,
       hardSnapCount: this.diagnostics.hardSnapCount,
       inputReplayCount: this.diagnostics.inputReplayCount,
+      ignoredCorrectionCount: this.diagnostics.ignoredCorrectionCount,
+      softBlendCount: this.diagnostics.softBlendCount,
     }
   }
 }
 
-/** Build a PlayerSimState from snapshot / LocalCorrection fields. */
+/** Build a PlayerSimState from LocalCorrection / snapshot fields. */
 export function simStateFromAuthoritative(fields: {
   x: number
   y: number
@@ -236,18 +275,26 @@ export function simStateFromAuthoritative(fields: {
   yaw: number
   pitch: number
   alive?: boolean
+  grounded?: boolean
+  jumpVelocity?: number
+  dashRemaining?: number
+  dashCooldown?: number
+  jumpCooldown?: number
+  dashVx?: number
+  dashVy?: number
+  dashVz?: number
 }): PlayerSimState {
   return {
     position: vec3(fields.x, fields.y, fields.z),
     velocity: vec3(fields.vx, fields.vy, fields.vz),
     yaw: fields.yaw,
     pitch: fields.pitch,
-    jumpVelocity: fields.vy,
-    grounded: Math.abs(fields.vy) < 0.01,
-    dashVelocity: vec3(),
-    dashRemaining: 0,
-    dashCooldown: 0,
-    jumpCooldown: 0,
+    jumpVelocity: fields.jumpVelocity ?? 0,
+    grounded: fields.grounded ?? fields.vy <= 0.05,
+    dashVelocity: vec3(fields.dashVx ?? 0, fields.dashVy ?? 0, fields.dashVz ?? 0),
+    dashRemaining: fields.dashRemaining ?? 0,
+    dashCooldown: fields.dashCooldown ?? 0,
+    jumpCooldown: fields.jumpCooldown ?? 0,
     alive: fields.alive ?? true,
   }
 }
