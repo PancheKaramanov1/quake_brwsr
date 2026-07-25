@@ -216,15 +216,16 @@ export class MultiplayerMenu {
       const data = (await res.json()) as Record<string, unknown>
       const protocolVersion = Number(data.protocolVersion ?? 0)
       const joinAvailable = Boolean(data.joinAvailable)
-      const players = Number(data.players ?? 0)
+      const players = Number(data.players ?? data.joinedPlayers ?? 0)
       const maxPlayers = Number(data.maxPlayers ?? 12)
+      const matchState = String(data.matchState ?? 'unknown')
       const wsUrl = wsUrlFromPublicStatus(data, base, defaultServerUrl())
       this.discovered = {
         serverName: String(data.serverName ?? 'Server'),
         region: String(data.region ?? 'local'),
         protocolVersion,
         mapName: String(data.mapName ?? 'unknown'),
-        matchState: String(data.matchState ?? 'unknown'),
+        matchState,
         players,
         maxPlayers,
         timeRemaining: Number(data.timeRemaining ?? 0),
@@ -233,19 +234,31 @@ export class MultiplayerMenu {
         publicUrl: String(data.publicUrl ?? base),
       }
       this.advancedUrlInput.value = wsUrl
+      const liveLabel =
+        matchState === 'Waiting' || matchState === 'Countdown'
+          ? `Live match: ${players} / ${maxPlayers} players`
+          : `Live match: ${players} / ${maxPlayers} · ${matchState}`
       this.serverInfoEl.innerHTML = [
         `<strong>${escapeHtml(this.discovered.serverName)}</strong>`,
         `${escapeHtml(this.discovered.mapName)} · ${escapeHtml(this.discovered.region)}`,
-        `${players}/${maxPlayers} · ${escapeHtml(this.discovered.matchState)}`,
+        escapeHtml(liveLabel),
         `Protocol ${protocolVersion} (client ${PROTOCOL_VERSION})`,
-      ].join('<br>')
+        data.serverInstanceId
+          ? `Server ${escapeHtml(String(data.serverInstanceId).slice(0, 8))} · Match ${escapeHtml(String(data.matchInstanceId ?? '').slice(0, 8))}`
+          : '',
+        data.buildVersion ? `Build ${escapeHtml(String(data.buildVersion))}` : '',
+      ]
+        .filter(Boolean)
+        .join('<br>')
 
       if (protocolVersion !== PROTOCOL_VERSION) {
         this.setStatus('Version mismatch — cannot join this server.', true)
       } else if (!joinAvailable || players >= maxPlayers) {
         this.setStatus('Server is full or not accepting joins.', true)
+      } else if (players === 0) {
+        this.setStatus('Server available — you will be the first player.')
       } else {
-        this.setStatus('Server available — ready to join.')
+        this.setStatus(`${liveLabel} — ready to join.`)
       }
     } catch {
       this.discovered = null

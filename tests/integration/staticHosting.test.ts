@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { GameServer } from '../../server/GameServer.js'
-import { SERVER_RESTART_MESSAGE } from '../../src/shared/simulation/constants.js'
+import { SERVER_RESTART_MESSAGE, PROTOCOL_VERSION } from '../../src/shared/simulation/constants.js'
 import { encodeMessage, decodeMessage } from '../../src/shared/protocol/codec.js'
 import { MessageType } from '../../src/shared/protocol/messages.js'
 import {
@@ -131,7 +131,7 @@ describe('static client hosting + server-status', () => {
 
     client.socket.send(
       encodeMessage(MessageType.Hello, {
-        protocolVersion: 1,
+        protocolVersion: PROTOCOL_VERSION,
         displayName: 'RestartProbe',
       }),
     )

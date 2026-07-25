@@ -104,6 +104,9 @@ export interface WelcomePayload {
   tickRate: number
   snapshotRate: number
   mapId: string
+  serverInstanceId: string
+  matchInstanceId: string
+  buildVersion: string
 }
 
 export interface RejectPayload {
@@ -263,6 +266,15 @@ export interface LocalCorrectionPayload {
   vz: number
   yaw: number
   pitch: number
+  grounded: boolean
+  jumpVelocity: number
+  dashRemaining: number
+  dashCooldown: number
+  jumpCooldown: number
+  dashVx: number
+  dashVy: number
+  dashVz: number
+  alive: boolean
 }
 
 export interface MessagePayloadMap {

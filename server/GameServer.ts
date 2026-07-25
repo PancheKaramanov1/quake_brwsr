@@ -5,6 +5,7 @@ import { MatchInstance } from './match/MatchInstance.js'
 import { ClientConnection, createConnectionId } from './network/ClientConnection.js'
 import { SecurityLogger } from './security/SecurityLogger.js'
 import { tryServeStatic } from './staticAssets.js'
+import { createServerInstanceId, getBuildVersion } from './instanceIds.js'
 
 export class GameServer {
   private httpServer: http.Server | null = null
@@ -14,9 +15,11 @@ export class GameServer {
   private startedAt = 0
   private accepting = true
   private networkReady = false
+  readonly serverInstanceId = createServerInstanceId()
+  readonly buildVersion = getBuildVersion()
 
   constructor(private readonly config: ServerConfig) {
-    this.match = new MatchInstance(config, this.securityLog)
+    this.match = new MatchInstance(config, this.securityLog, this.serverInstanceId, this.buildVersion)
   }
 
   async start(): Promise<void> {
@@ -117,8 +120,15 @@ export class GameServer {
     }
   }
 
+  private liveHeaders(cors: Record<string, string>): Record<string, string> {
+    return {
+      ...cors,
+      'Cache-Control': 'no-store',
+    }
+  }
+
   private writeStatus(res: http.ServerResponse, cors: Record<string, string>): void {
-    res.writeHead(200, { 'Content-Type': 'application/json', ...cors })
+    res.writeHead(200, { 'Content-Type': 'application/json', ...this.liveHeaders(cors) })
     const status = this.match.getPublicStatus()
     res.end(
       JSON.stringify({
@@ -145,13 +155,19 @@ export class GameServer {
     }
     if (url === '/ready' || url === '/readyz') {
       const ready = this.isReady()
-      res.writeHead(ready ? 200 : 503, { 'Content-Type': 'application/json', ...cors })
+      res.writeHead(ready ? 200 : 503, {
+        'Content-Type': 'application/json',
+        ...this.liveHeaders(cors),
+      })
       res.end(
         JSON.stringify({
           ready,
           accepting: this.accepting,
           networkReady: this.networkReady,
           simulationReady: this.match.isSimulationReady,
+          serverInstanceId: this.serverInstanceId,
+          matchInstanceId: this.match.matchInstanceId,
+          buildVersion: this.buildVersion,
         }),
       )
       return
@@ -166,7 +182,7 @@ export class GameServer {
       return
     }
     if (url === '/metrics') {
-      res.writeHead(200, { 'Content-Type': 'application/json', ...cors })
+      res.writeHead(200, { 'Content-Type': 'application/json', ...this.liveHeaders(cors) })
       const metrics = this.match.getMetrics()
       // Never expose reconnect tokens, IPs, or display names here
       res.end(JSON.stringify(metrics))

@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import {
+  BUILD_VERSION,
   DISPLAY_NAME_MAX,
   DISPLAY_NAME_MIN,
   DISPLAY_NAME_PATTERN,
@@ -36,6 +37,7 @@ import type { ServerConfig } from '../config.js'
 import type { ClientConnection } from '../network/ClientConnection.js'
 import { RateLimiter } from '../security/RateLimiter.js'
 import { SecurityLogger } from '../security/SecurityLogger.js'
+import { createMatchInstanceId } from '../instanceIds.js'
 
 export interface SessionRecord {
   sessionId: string
@@ -53,6 +55,9 @@ export class MatchInstance {
   readonly world = new GameWorld()
   readonly sessions = new Map<string, SessionRecord>()
   readonly playerToSession = new Map<number, string>()
+  readonly matchInstanceId: string
+  readonly serverInstanceId: string
+  readonly buildVersion: string
   private tickTimer: ReturnType<typeof setInterval> | null = null
   private running = false
   private resultsTimer: ReturnType<typeof setTimeout> | null = null
@@ -81,6 +86,13 @@ export class MatchInstance {
     messagesByType: {} as Record<string, number>,
     peakPlayers: 0,
     peakPendingInputs: 0,
+    fireRejectedDead: 0,
+    fireRejectedCooldown: 0,
+    fireRejectedAmmo: 0,
+    fireRejectedReload: 0,
+    fireRejectedOrigin: 0,
+    fireRejectedDirection: 0,
+    fireRejectedRateLimit: 0,
   }
   private simulationReady = false
   private memStartBytes = 0
@@ -89,7 +101,12 @@ export class MatchInstance {
   constructor(
     private readonly config: ServerConfig,
     private readonly securityLog: SecurityLogger,
+    serverInstanceId?: string,
+    buildVersion?: string,
   ) {
+    this.matchInstanceId = createMatchInstanceId()
+    this.serverInstanceId = serverInstanceId ?? createMatchInstanceId()
+    this.buildVersion = buildVersion ?? BUILD_VERSION
     this.world.scoreLimit = config.scoreLimit
     this.world.matchDurationSeconds = config.matchDurationSeconds
     this.world.timeRemaining = config.matchDurationSeconds
@@ -189,8 +206,23 @@ export class MatchInstance {
           tickRate: TICK_RATE,
           snapshotRate: SNAPSHOT_RATE,
           mapId: this.world.map.id,
+          serverInstanceId: this.serverInstanceId,
+          matchInstanceId: this.matchInstanceId,
+          buildVersion: this.buildVersion,
         }),
       )
+
+      // Joiner must learn about players already in the match.
+      for (const other of this.sessions.values()) {
+        if (other.playerId === player.id) continue
+        if (!this.world.players.has(other.playerId)) continue
+        conn.send(
+          encodeMessage(MessageType.PlayerJoined, {
+            playerId: other.playerId,
+            displayName: other.displayName,
+          }),
+        )
+      }
 
       this.broadcastExcept(
         player.id,
@@ -200,6 +232,7 @@ export class MatchInstance {
         }),
       )
 
+      this.broadcastMatchState()
       this.maybeStartMatch()
       this.metrics.connections += 1
     } catch {
@@ -243,8 +276,21 @@ export class MatchInstance {
         tickRate: TICK_RATE,
         snapshotRate: SNAPSHOT_RATE,
         mapId: this.world.map.id,
+        serverInstanceId: this.serverInstanceId,
+        matchInstanceId: this.matchInstanceId,
+        buildVersion: this.buildVersion,
       }),
     )
+    for (const other of this.sessions.values()) {
+      if (other.playerId === session.playerId) continue
+      if (!this.world.players.has(other.playerId)) continue
+      conn.send(
+        encodeMessage(MessageType.PlayerJoined, {
+          playerId: other.playerId,
+          displayName: other.displayName,
+        }),
+      )
+    }
   }
 
   handleInput(conn: ClientConnection, input: InputCommandPayload): void {
@@ -504,6 +550,18 @@ export class MatchInstance {
             }),
           )
           break
+        case 'fire_rejected': {
+          const reason = String(ev.data.reason ?? 'unknown')
+          this.metrics.weaponViolations += 1
+          if (reason === 'dead') this.metrics.fireRejectedDead += 1
+          else if (reason === 'fire_rate') this.metrics.fireRejectedCooldown += 1
+          else if (reason === 'no_ammo') this.metrics.fireRejectedAmmo += 1
+          else if (reason === 'reloading') this.metrics.fireRejectedReload += 1
+          else if (reason === 'origin') this.metrics.fireRejectedOrigin += 1
+          else if (reason === 'direction') this.metrics.fireRejectedDirection += 1
+          else this.metrics.fireRejectedRateLimit += 1
+          break
+        }
         case 'projectile_impact':
           this.broadcast(
             encodeMessage(MessageType.ProjectileImpact, {
@@ -647,6 +705,15 @@ export class MatchInstance {
             vz: me.sim.velocity.z,
             yaw: me.sim.yaw,
             pitch: me.sim.pitch,
+            grounded: me.sim.grounded,
+            jumpVelocity: me.sim.jumpVelocity,
+            dashRemaining: me.sim.dashRemaining,
+            dashCooldown: me.sim.dashCooldown,
+            jumpCooldown: me.sim.jumpCooldown,
+            dashVx: me.sim.dashVelocity.x,
+            dashVy: me.sim.dashVelocity.y,
+            dashVz: me.sim.dashVelocity.z,
+            alive: me.sim.alive,
           }),
         )
       }
@@ -720,7 +787,8 @@ export class MatchInstance {
     const joinAvailable =
       this.simulationReady &&
       this.activePlayerCount() < this.config.maxPlayers &&
-      this.world.phase !== MatchPhase.Ending
+      this.world.phase !== MatchPhase.Ending &&
+      this.world.phase !== MatchPhase.Results
     return {
       serverName: this.config.serverName,
       region: this.config.region,
@@ -729,12 +797,17 @@ export class MatchInstance {
       mapName: this.world.map.name,
       matchState: MatchPhase[this.world.phase] ?? String(this.world.phase),
       players: this.activePlayerCount(),
+      joinedPlayers: this.activePlayerCount(),
+      connectedPlayers: this.activePlayerCount(),
       maxPlayers: this.config.maxPlayers,
       timeRemaining: Math.max(0, Math.round(this.world.timeRemaining)),
       scoreLimit: this.world.scoreLimit,
       joinAvailable,
       wsPath: this.config.wsPath,
       publicUrl: this.config.publicUrl,
+      serverInstanceId: this.serverInstanceId,
+      matchInstanceId: this.matchInstanceId,
+      buildVersion: this.buildVersion,
     }
   }
 
@@ -773,6 +846,16 @@ export class MatchInstance {
       rateLimitViolations: this.metrics.rateLimitViolations,
       movementViolations: this.metrics.movementViolations,
       weaponViolations: this.metrics.weaponViolations,
+      fireRejectedDead: this.metrics.fireRejectedDead,
+      fireRejectedCooldown: this.metrics.fireRejectedCooldown,
+      fireRejectedAmmo: this.metrics.fireRejectedAmmo,
+      fireRejectedReload: this.metrics.fireRejectedReload,
+      fireRejectedOrigin: this.metrics.fireRejectedOrigin,
+      fireRejectedDirection: this.metrics.fireRejectedDirection,
+      fireRejectedRateLimit: this.metrics.fireRejectedRateLimit,
+      serverInstanceId: this.serverInstanceId,
+      matchInstanceId: this.matchInstanceId,
+      buildVersion: this.buildVersion,
       reconnectAttempts: this.metrics.reconnectAttempts,
       reconnectSuccesses: this.metrics.reconnectSuccesses,
       matchStarts: this.metrics.matchStarts,

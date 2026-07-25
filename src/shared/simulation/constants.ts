@@ -1,6 +1,9 @@
 /** Shared networking and simulation constants (no Babylon / DOM). */
 
-export const PROTOCOL_VERSION = 1
+export const PROTOCOL_VERSION = 2
+
+/** Process-local build identifier (non-secret; safe for /status). */
+export const BUILD_VERSION = 'mp-fix-2026-07-25'
 
 export const TICK_RATE = 60
 export const TICK_DT = 1 / TICK_RATE
@@ -18,9 +21,13 @@ export const MAX_MESSAGE_BYTES = 64 * 1024
 export const MAX_MESSAGES_PER_SECOND = 120
 export const MAX_INPUTS_PER_SECOND = 90
 /** Max inputs retained per connection between ticks (bounded queue). */
-export const MAX_PENDING_INPUTS = 32
-/** Max inputs applied from one connection in a single server tick. */
-export const MAX_INPUTS_PER_TICK = 2
+export const MAX_PENDING_INPUTS = 48
+/**
+ * Max inputs applied from one connection in a single server tick.
+ * Keep near 1–3 so multiple applyInput calls cannot become a speed hack;
+ * 3 allows mild catch-up under jitter without 60× movement per tick.
+ */
+export const MAX_INPUTS_PER_TICK = 3
 /** Soft tick budget (ms); overruns are counted in metrics. */
 export const TICK_BUDGET_MS = 1000 / TICK_RATE
 
@@ -60,10 +67,15 @@ export const ROCKET_HIT_RADIUS = 1.0
 export const PLAYER_HIT_RADIUS = 0.9
 
 export const MAX_POSITION_DELTA_PER_TICK = PLAYER_SPEED * TICK_DT * 3 + DASH_POWER * TICK_DT
+/** Errors below this are ignored for visual correction. */
+export const CORRECTION_IGNORE_THRESHOLD = 0.08
+/** Soft-blend band; above this → hard snap. */
 export const CORRECTION_SNAP_THRESHOLD = 2.5
-export const CORRECTION_SMOOTH_FACTOR = 0.25
+export const CORRECTION_SMOOTH_FACTOR = 0.35
 export const MAX_INPUT_AGE_TICKS = 120
 export const MAX_FUTURE_INPUT_TICKS = 6
+/** Max inputs replayed during one reconcile. */
+export const MAX_REPLAY_INPUTS = 64
 
 export const DISPLAY_NAME_MIN = 1
 export const DISPLAY_NAME_MAX = 16

@@ -48,7 +48,10 @@ describe('protocol codec', () => {
       reconnectToken: 'tok_456',
       tickRate: 60,
       snapshotRate: 20,
-      mapId: 'reactor-atrium-v1',
+      mapId: 'reactor-atrium-v2',
+      serverInstanceId: 'srvabc',
+      matchInstanceId: 'mtch01',
+      buildVersion: 'test',
     }
     const encoded = encodeMessage(MessageType.Welcome, payload)
     const decoded = expectOk(decodeMessage(encoded), MessageType.Welcome)
@@ -171,6 +174,9 @@ describe('protocol codec', () => {
       tickRate: 60,
       snapshotRate: 20,
       mapId: 'map',
+      serverInstanceId: 's',
+      matchInstanceId: 'm',
+      buildVersion: 'b',
     })
     const truncated = encoded.subarray(0, PROTOCOL_HEADER_BYTES + 2)
     const result = decodeMessage(truncated)

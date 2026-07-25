@@ -357,7 +357,13 @@ function estimatePayloadSize(type: MessageType, payload: MessagePayloadMap[Messa
         2 +
         2 +
         1 +
-        utf8ByteLength(p.mapId)
+        utf8ByteLength(p.mapId) +
+        1 +
+        utf8ByteLength(p.serverInstanceId) +
+        1 +
+        utf8ByteLength(p.matchInstanceId) +
+        1 +
+        utf8ByteLength(p.buildVersion)
       )
     }
     case MessageType.Reject: {
@@ -412,7 +418,8 @@ function estimatePayloadSize(type: MessageType, payload: MessagePayloadMap[Messa
     case MessageType.EntityDestroy:
       return 4
     case MessageType.LocalCorrection:
-      return 4 + 4 + 4 * 3 + 2 * 3 + 2 + 2
+      // tick, ack, pos×3, vel×3, yaw, pitch, flags, jumpVel, dashRem, dashCd, jumpCd, dashV×3
+      return 4 + 4 + 4 * 3 + 2 * 3 + 2 + 2 + 1 + 2 + 2 + 2 + 2 + 2 * 3
     default: {
       const _exhaustive: never = type
       return _exhaustive
@@ -599,6 +606,9 @@ function encodePayload(type: MessageType, payload: MessagePayloadMap[MessageType
       w.u16(p.tickRate)
       w.u16(p.snapshotRate)
       w.str8(p.mapId)
+      w.str8(p.serverInstanceId)
+      w.str8(p.matchInstanceId)
+      w.str8(p.buildVersion)
       break
     }
     case MessageType.Reject: {
@@ -744,6 +754,17 @@ function encodePayload(type: MessageType, payload: MessagePayloadMap[MessageType
       w.i16(quantizeVel(p.vz))
       w.i16(quantizeAngle(p.yaw))
       w.i16(quantizeAngle(p.pitch))
+      let flags = 0
+      if (p.grounded) flags |= 1
+      if (p.alive) flags |= 2
+      w.u8(flags)
+      w.i16(quantizeVel(p.jumpVelocity))
+      w.i16(quantizeVel(p.dashRemaining * 10))
+      w.i16(quantizeVel(p.dashCooldown * 10))
+      w.i16(quantizeVel(p.jumpCooldown * 10))
+      w.i16(quantizeVel(p.dashVx))
+      w.i16(quantizeVel(p.dashVy))
+      w.i16(quantizeVel(p.dashVz))
       break
     }
     default: {
@@ -824,17 +845,33 @@ function decodePayload(type: MessageType, r: Reader): MessagePayloadMap[MessageT
       const tickRate = r.u16()
       const snapshotRate = r.u16()
       const mapId = r.str8()
+      const serverInstanceId = r.str8()
+      const matchInstanceId = r.str8()
+      const buildVersion = r.str8()
       if (
         playerId === null ||
         sessionId === null ||
         reconnectToken === null ||
         tickRate === null ||
         snapshotRate === null ||
-        mapId === null
+        mapId === null ||
+        serverInstanceId === null ||
+        matchInstanceId === null ||
+        buildVersion === null
       ) {
         return null
       }
-      return { playerId, sessionId, reconnectToken, tickRate, snapshotRate, mapId }
+      return {
+        playerId,
+        sessionId,
+        reconnectToken,
+        tickRate,
+        snapshotRate,
+        mapId,
+        serverInstanceId,
+        matchInstanceId,
+        buildVersion,
+      }
     }
     case MessageType.Reject: {
       const reason = r.u8()
@@ -1058,6 +1095,14 @@ function decodePayload(type: MessageType, r: Reader): MessagePayloadMap[MessageT
       const vz = r.i16()
       const yaw = r.i16()
       const pitch = r.i16()
+      const flags = r.u8()
+      const jumpVelocityQ = r.i16()
+      const dashRemainingQ = r.i16()
+      const dashCooldownQ = r.i16()
+      const jumpCooldownQ = r.i16()
+      const dashVx = r.i16()
+      const dashVy = r.i16()
+      const dashVz = r.i16()
       if (
         tick === null ||
         ackSeq === null ||
@@ -1068,7 +1113,15 @@ function decodePayload(type: MessageType, r: Reader): MessagePayloadMap[MessageT
         vy === null ||
         vz === null ||
         yaw === null ||
-        pitch === null
+        pitch === null ||
+        flags === null ||
+        jumpVelocityQ === null ||
+        dashRemainingQ === null ||
+        dashCooldownQ === null ||
+        jumpCooldownQ === null ||
+        dashVx === null ||
+        dashVy === null ||
+        dashVz === null
       ) {
         return null
       }
@@ -1083,6 +1136,15 @@ function decodePayload(type: MessageType, r: Reader): MessagePayloadMap[MessageT
         vz: dequantizeVel(vz),
         yaw: dequantizeAngle(yaw),
         pitch: dequantizeAngle(pitch),
+        grounded: (flags & 1) !== 0,
+        alive: (flags & 2) !== 0,
+        jumpVelocity: dequantizeVel(jumpVelocityQ),
+        dashRemaining: Math.max(0, dequantizeVel(dashRemainingQ) / 10),
+        dashCooldown: Math.max(0, dequantizeVel(dashCooldownQ) / 10),
+        jumpCooldown: Math.max(0, dequantizeVel(jumpCooldownQ) / 10),
+        dashVx: dequantizeVel(dashVx),
+        dashVy: dequantizeVel(dashVy),
+        dashVz: dequantizeVel(dashVz),
       }
     }
     default: {

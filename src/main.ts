@@ -25,6 +25,10 @@ async function main(): Promise<void> {
     throw new Error('Game canvas not found!')
   }
 
+  // Hide legacy SP overlay chrome during multiplayer shell
+  const legacyUi = document.getElementById('ui')
+  if (legacyUi) legacyUi.style.display = 'none'
+
   let disposeSession: (() => void) | null = null
   let mpGame: MultiplayerGame | null = null
 
@@ -32,6 +36,7 @@ async function main(): Promise<void> {
     onSinglePlayer: () => {
       void (async () => {
         menu.hide()
+        if (legacyUi) legacyUi.style.display = ''
         disposeSession = await startSinglePlayer(canvas)
       })()
     },
@@ -40,7 +45,7 @@ async function main(): Promise<void> {
         menu.setStatus('Connecting…')
         try {
           mpGame?.dispose()
-          mpGame = new MultiplayerGame(canvas, document.body)
+          mpGame = new MultiplayerGame(canvas, document.body, menu)
           await mpGame.startSession(serverUrl, displayName)
           menu.hide()
           disposeSession = () => {
@@ -54,6 +59,10 @@ async function main(): Promise<void> {
           )
         }
       })()
+    },
+    onBackToMain: () => {
+      mpGame?.dispose()
+      mpGame = null
     },
   })
 
