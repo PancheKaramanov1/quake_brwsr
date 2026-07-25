@@ -4,11 +4,11 @@
 
 | Field | Value |
 | ----- | ----- |
-| Id | `reactor-atrium-v1` |
+| Id | `reactor-atrium-v2` |
 | Display name | Reactor Atrium |
 | Source of truth | `src/shared/simulation/mapDefinition.ts` (`ARENA_MAP`) |
-| Bounds | half-size **95**, floor **0**, ceiling **40** |
-| Collision | Axis-aligned boxes → `buildAABBs()` for shared sim |
+| Bounds | half-size **160**, floor **0**, ceiling **40** (~2.8× footprint vs v1) |
+| Collision | Axis-aligned boxes with explicit `collision` → `buildAABBs()` skips `collision: false` |
 | Mode fit | FFA up to **12** players |
 
 Client presentation should follow the same box layout (or derive meshes from this definition) so visuals match server collision.
@@ -17,19 +17,20 @@ Client presentation should follow the same box layout (or derive meshes from thi
 
 | Zone | Role |
 | ---- | ---- |
-| `atrium` | Central multi-level platforms (y ≈ 1.5 / 6 / 11), pillars, cover, cardinal ramps |
-| `tunnels` | Cross under atrium — low floor corridors and exits |
-| `east_wing` / `west_wing` | Indoor rooms with ground + upper floors and cover |
-| `rooftop` | High pads over wings and flanks |
-| `courtyard` | Outer ring platforms + cover near boundary |
-| `service` | Diagonal NW/SE service corridors |
-| `connectors` | Links between wings, atrium, and vertical routes |
+| `reactor_core` | Central multi-level contested platforms (y ≈ 1.5 / 6 / 11), pillars, cover, cardinal ramps |
+| `control_deck` | Elevated overlook pads and stair ramps |
+| `cooling_yard` | Open mid-ring pads + berms for medium/long range |
+| `maintenance` | Lower cross tunnels and branch corridors under the core |
+| `generator_hall` | Large E/W interiors with columns and upper floors |
+| `service_quarters` | Tight corner room clusters with partitions |
+| `cargo_transfer` | Diagonal ramps, stacked cover, mid links |
+| `perimeter` | Outer catwalk ring for rotation |
 
-Outer **boundary** walls enclose the playable volume.
+Outer **boundary** walls enclose the playable volume at half-size 160.
 
 ## Spawns
 
-Twenty spawn points across zones (courtyard corners, wings, atrium mid/high, rooftops, tunnels, service, connectors). Yaw faces roughly **away from center** with a small offset so players do not all stare at each other.
+Twenty-four-plus spawn points across zones and elevations (ground / mid / high). Yaw faces roughly **away from center** with a small offset so players do not all stare at each other.
 
 Server combat uses `pickBestSpawn` (shared `combat.ts`) to prefer safer points when respawning.
 
@@ -37,29 +38,29 @@ Server combat uses `pickBestSpawn` (shared `combat.ts`) to prefer safer points w
 
 | Mode | Map |
 | ---- | --- |
-| Multiplayer | Shared `ARENA_MAP` / `reactor-atrium-v1` (client + server) |
+| Multiplayer | Shared `ARENA_MAP` / `reactor-atrium-v2` (client + server) |
 | Single-player | Legacy Babylon `Arena.ts` + AI enemies (intentional) |
 
 Movement and rocket combat **constants** are unified via `src/shared/simulation/constants.ts` so damage/speed/fire-rate cannot silently drift. Full SP migration onto Reactor Atrium is deferred to avoid breaking enemy placements.
 
 ## Validation
 
-`tests/unit/map.test.ts` asserts ≥16 spawns, ≥3 elevations, zone coverage, bounds, separation, AABB validity, and spawn clearance from solids.
+`tests/unit/map.test.ts` asserts ≥20 spawns, ≥3 elevations, ≥6 zones, zone coverage, bounds, separation, AABB validity, explicit `collision` flags, and spawn clearance from solids.
 
 ## Design goals for this layout
 
 - **Verticality** — ground, mid, and high fights; rocket splash punishes clustering on small pads
-- **Multiple routes** — tunnels, connectors, and ramps reduce spawn camping
-- **Cover density** — atrium/wing/courtyard cover boxes break long sightlines
+- **Multiple routes** — maintenance, cargo links, and perimeter catwalks reduce spawn camping
+- **Cover density** — core/hall/yard/cargo cover boxes break long sightlines
 - **Capacity** — enough distinct pads and wings for 12 FFA without constant pile-up in one room
-- **Shared AABB** — every solid is an authorable box (`cx,cy,cz,w,h,d` + `kind` + `zone`); no mesh cooking required for netcode
+- **Shared AABB** — every solid is an authorable box (`cx,cy,cz,w,h,d` + `kind` + `zone` + `collision`); no mesh cooking required for netcode
 
-Box `kind` values: `wall`, `platform`, `ramp`, `cover`, `structure`, `boundary` (gameplay currently treats them as solid AABBs; kind is for authoring/filtering).
+Box `kind` values: `wall`, `platform`, `ramp`, `cover`, `structure`, `boundary` (gameplay currently treats collidable boxes as solid AABBs; kind is for authoring/filtering).
 
 ## Editing the map
 
 1. Change boxes/spawns in `mapDefinition.ts`.
-2. Keep `id` stable (`reactor-atrium-v1`) or bump intentionally and update clients (`Welcome.mapId` / `JoinMatch`).
+2. Keep `id` stable (`reactor-atrium-v2`) or bump intentionally and update clients (`Welcome.mapId` / `JoinMatch`).
 3. Run `tests/unit/map.test.ts` and movement/combat sims.
 4. Playtest spawn unfairness and rocket sightlines at 8–12 players.
 
@@ -73,7 +74,7 @@ Box `kind` values: `wall`, `platform`, `ramp`, `cover`, `structure`, `boundary` 
 
 ## Constraints to respect
 
-- Player capsule approx: radius **0.3**, height **1.8** (`constants.ts`) — leave ledge depths and tunnel heights playable
+- Player capsule approx: radius **0.3**, height **1.8** (`constants.ts`) — leave ledge depths and tunnel heights playable; keep spawns clear of solids by ≥ radius + margin
 - Rocket splash radius **5** — tiny rooms become lethal; intentional for FFA
 - Stay within bounds half-size or update boundary boxes together
 - Prefer data-driven boxes over one-off client-only meshes that the server cannot collide

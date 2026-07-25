@@ -3,8 +3,8 @@ import { ARENA_MAP, buildAABBs } from '../../src/shared/simulation/mapDefinition
 import { PLAYER_RADIUS } from '../../src/shared/simulation/constants.js'
 
 describe('ARENA_MAP', () => {
-  it('has at least 16 spawn points', () => {
-    expect(ARENA_MAP.spawns.length).toBeGreaterThanOrEqual(16)
+  it('has at least 20 spawn points', () => {
+    expect(ARENA_MAP.spawns.length).toBeGreaterThanOrEqual(20)
   })
 
   it('has at least 3 distinct spawn Y elevations (rounded)', () => {
@@ -16,10 +16,17 @@ describe('ARENA_MAP', () => {
     expect(ARENA_MAP.zones.length).toBeGreaterThanOrEqual(6)
   })
 
-  it('buildAABBs returns one AABB per box', () => {
+  it('buildAABBs returns one AABB per collidable box', () => {
     const aabbs = buildAABBs(ARENA_MAP)
-    expect(aabbs.length).toBe(ARENA_MAP.boxes.length)
+    const collidable = ARENA_MAP.boxes.filter((b) => b.collision !== false)
+    expect(aabbs.length).toBe(collidable.length)
     expect(aabbs.length).toBeGreaterThan(0)
+  })
+
+  it('every MapBox has an explicit collision boolean', () => {
+    for (const b of ARENA_MAP.boxes) {
+      expect(typeof b.collision).toBe('boolean')
+    }
   })
 
   it('spawn points are inside map bounds', () => {
@@ -85,7 +92,7 @@ describe('ARENA_MAP', () => {
   })
 
   it('client/server map identity is single source (id + spawn count)', () => {
-    expect(ARENA_MAP.id).toBe('reactor-atrium-v1')
-    expect(ARENA_MAP.spawns.length).toBe(20)
+    expect(ARENA_MAP.id).toBe('reactor-atrium-v2')
+    expect(ARENA_MAP.spawns.length).toBeGreaterThanOrEqual(20)
   })
 })

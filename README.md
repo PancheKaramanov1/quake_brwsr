@@ -8,7 +8,7 @@ TypeScript / Vite / Babylon.js first-person shooter with an optional **server-au
 - Multiplayer FFA (up to 12 players) over WebSockets
 - Shared fixed-tick simulation (60 Hz) with client prediction and remote interpolation
 - Server-authoritative rockets, damage, death, respawn, score, and match timer
-- Complex multi-zone map (`reactor-atrium-v1`) with shared AABB collision
+- Complex multi-zone map (`reactor-atrium-v2`) with shared AABB collision
 - One-process production hosting: Vite client + WebSocket server on the same origin
 
 ## Controls
